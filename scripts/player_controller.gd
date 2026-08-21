@@ -13,23 +13,15 @@ var sand: SandField
 var aim_camera: Camera3D
 var visual_root: Node3D
 var animation_player: AnimationPlayer
-var skeleton: Skeleton3D
 var idle_animation := ""
 var walk_animation := ""
 var throw_animation := ""
-var left_foot_bone := -1
-var right_foot_bone := -1
-var previous_left_foot := Vector3.ZERO
-var previous_right_foot := Vector3.ZERO
-var last_left_step_time := -10.0
-var last_right_step_time := -10.0
-var fallback_step_clock := 0.0
-var fallback_side := -1
 var throw_locked := false
-var body_time := 0.0
 
 func _ready() -> void:
     add_to_group("player")
+    collision_layer = 2
+    collision_mask = 2
     floor_max_angle = deg_to_rad(50.0)
     floor_snap_length = 0.22
 
@@ -57,9 +49,7 @@ func _load_visual() -> void:
             model.scale = Vector3.ONE * 0.86
             visual_root.add_child(model)
             animation_player = _find_animation_player(model)
-            skeleton = _find_skeleton(model)
             _discover_animations()
-            _discover_feet()
             return
 
     _build_fallback_visual()
@@ -86,11 +76,10 @@ func _build_fallback_visual() -> void:
     visual_root.add_child(head)
 
 func _physics_process(delta: float) -> void:
-    body_time += delta
-    var input_direction := _camera_relative_input()
+    var input_direction: Vector3 = _camera_relative_input()
     var horizontal_velocity := Vector3(velocity.x, 0.0, velocity.z)
-    var desired_velocity := input_direction * WALK_SPEED
-    var movement_force := (desired_velocity - horizontal_velocity) * (MASS_KG * RESPONSE)
+    var desired_velocity: Vector3 = input_direction * WALK_SPEED
+    var movement_force: Vector3 = (desired_velocity - horizontal_velocity) * (MASS_KG * RESPONSE)
     velocity += movement_force / MASS_KG * delta
 
     if not is_on_floor():
@@ -99,7 +88,7 @@ func _physics_process(delta: float) -> void:
         apply_impulse(Vector3.UP * JUMP_IMPULSE)
 
     if input_direction.length_squared() > 0.01:
-        rotation.y = lerp_angle(rotation.y, atan2(-input_direction.x, -input_direction.z), min(1.0, delta * 11.0))
+        rotation.y = lerp_angle(rotation.y, atan2(-input_direction.x, -input_direction.z), minf(1.0, delta * 11.0))
         _play_walk()
     else:
         velocity.x = move_toward(velocity.x, 0.0, WALK_SPEED * delta * 4.0)
@@ -110,7 +99,6 @@ func _physics_process(delta: float) -> void:
 
     if sand != null:
         global_position = sand.clamp_inside(global_position)
-        _update_footsteps(delta, input_direction.length())
 
 func _unhandled_input(event: InputEvent) -> void:
     if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
@@ -143,12 +131,14 @@ func _camera_relative_input() -> Vector3:
 func _throw_projectile() -> void:
     if throw_locked:
         return
+
     throw_locked = true
     _play_throw()
 
-    var aim_direction := _aim_direction()
+    var aim_direction: Vector3 = _aim_direction()
     if aim_direction.length_squared() < 0.01:
         aim_direction = -global_basis.z
+
     var flat := Vector3(aim_direction.x, 0.0, aim_direction.z)
     if flat.length_squared() > 0.001:
         rotation.y = atan2(-flat.x, -flat.z)
@@ -162,7 +152,8 @@ func _throw_projectile() -> void:
     var right := global_basis.x
     get_tree().current_scene.add_child(orb)
     orb.global_position = global_position + Vector3.UP * 1.0 + forward * 0.48 + right * 0.15
-    var launch_velocity := (aim_direction.normalized() * 8.7) + Vector3.UP * 2.8
+
+    var launch_velocity: Vector3 = aim_direction.normalized() * 8.7 + Vector3.UP * 2.8
     orb.apply_central_impulse(launch_velocity * orb.mass)
 
     await get_tree().create_timer(0.28).timeout
@@ -171,60 +162,28 @@ func _throw_projectile() -> void:
 func _aim_direction() -> Vector3:
     if aim_camera == null:
         return -global_basis.z
+
     var viewport := get_viewport()
     var mouse := viewport.get_visible_rect().size * 0.5
     if Input.mouse_mode == Input.MOUSE_MODE_VISIBLE:
         mouse = viewport.get_mouse_position()
+
     var origin := aim_camera.project_ray_origin(mouse)
     var ray := aim_camera.project_ray_normal(mouse)
-    var target_y := sand.surface_height_at(global_position) if sand != null else global_position.y
-    if abs(ray.y) > 0.0001:
-        var t := (target_y - origin.y) / ray.y
+    var target_y: float = sand.surface_height_at(global_position) if sand != null else global_position.y
+
+    if absf(ray.y) > 0.0001:
+        var t: float = (target_y - origin.y) / ray.y
         if t > 0.0:
-            var target := origin + ray * t
+            var target: Vector3 = origin + ray * t
             return (target - (global_position + Vector3.UP * 0.8)).normalized()
+
     return -aim_camera.global_basis.z
-
-func _update_footsteps(delta: float, movement_amount: float) -> void:
-    if sand == null or not is_on_floor() or movement_amount < 0.25:
-        fallback_step_clock = 0.0
-        return
-
-    if skeleton != null and left_foot_bone >= 0 and right_foot_bone >= 0:
-        _check_bone_foot(left_foot_bone, -1, previous_left_foot, last_left_step_time)
-        _check_bone_foot(right_foot_bone, 1, previous_right_foot, last_right_step_time)
-        previous_left_foot = _bone_world_position(left_foot_bone)
-        previous_right_foot = _bone_world_position(right_foot_bone)
-        return
-
-    fallback_step_clock += delta * max(0.55, Vector2(velocity.x, velocity.z).length() / WALK_SPEED)
-    if fallback_step_clock >= 0.34:
-        fallback_step_clock = 0.0
-        fallback_side *= -1
-        var foot_position := global_position + global_basis.x * 0.17 * fallback_side - global_basis.z * 0.06
-        foot_position.y = sand.surface_height_at(foot_position)
-        sand.apply_footprint(foot_position, rotation.y, fallback_side)
-
-func _check_bone_foot(bone_index: int, side: int, previous: Vector3, last_time: float) -> void:
-    var current := _bone_world_position(bone_index)
-    var surface := sand.surface_height_at(current)
-    var descending := previous == Vector3.ZERO or current.y <= previous.y + 0.012
-    if current.y <= surface + 0.12 and descending and body_time - last_time > 0.22:
-        sand.apply_footprint(Vector3(current.x, surface, current.z), rotation.y, side)
-        if side < 0:
-            last_left_step_time = body_time
-        else:
-            last_right_step_time = body_time
-
-func _bone_world_position(bone_index: int) -> Vector3:
-    if skeleton == null or bone_index < 0:
-        return global_position
-    var pose := skeleton.get_bone_global_pose(bone_index)
-    return skeleton.global_transform * pose.origin
 
 func _discover_animations() -> void:
     if animation_player == null:
         return
+
     var animations := animation_player.get_animation_list()
     idle_animation = _find_animation_name(animations, ["idle", "standing", "stand"])
     walk_animation = _find_animation_name(animations, ["walk", "walking", "run"])
@@ -246,18 +205,6 @@ func _find_animation_name(animations: PackedStringArray, keywords: Array[String]
                 return String(animation_name)
     return ""
 
-func _discover_feet() -> void:
-    if skeleton == null:
-        return
-    for i in range(skeleton.get_bone_count()):
-        var name := String(skeleton.get_bone_name(i)).to_lower()
-        if not (name.contains("foot") or name.contains("ankle")):
-            continue
-        if left_foot_bone < 0 and (name.contains("left") or name.contains("_l") or name.ends_with(".l")):
-            left_foot_bone = i
-        elif right_foot_bone < 0 and (name.contains("right") or name.contains("_r") or name.ends_with(".r")):
-            right_foot_bone = i
-
 func _play_walk() -> void:
     if animation_player == null or walk_animation == "" or throw_locked:
         return
@@ -267,6 +214,7 @@ func _play_walk() -> void:
 func _play_idle_if_possible() -> void:
     if animation_player == null or throw_locked:
         return
+
     if idle_animation != "":
         if animation_player.current_animation != idle_animation or not animation_player.is_playing():
             animation_player.play(idle_animation, 0.16, 1.0)
@@ -285,15 +233,6 @@ func _find_animation_player(root: Node) -> AnimationPlayer:
         return root
     for child in root.get_children():
         var found := _find_animation_player(child)
-        if found != null:
-            return found
-    return null
-
-func _find_skeleton(root: Node) -> Skeleton3D:
-    if root is Skeleton3D:
-        return root
-    for child in root.get_children():
-        var found := _find_skeleton(child)
         if found != null:
             return found
     return null

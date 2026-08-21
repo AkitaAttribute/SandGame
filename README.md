@@ -15,11 +15,17 @@ The world uses 0.7 Earth gravity (`6.867 m/s²`). The player is treated as a 20 
 
 ## Sand prototype
 
-The current implementation renders roughly 15,500 low-poly sand orbs over a deformable heightfield. The field is split into red, blue, yellow, and green material quadrants. Color is stored as simulation state rather than calculated from current position.
+The current implementation uses a fixed pool of 3,072 simulated spherical grains. Each grain owns persistent position, velocity, and material color for the lifetime of the world.
 
-Foot contacts displace/compact the heightfield and form small lips around footprints. The projectile detonates after three seconds, flashes red progressively faster, excavates a crater, builds a berm, and launches colored rigid-body sand chunks. Those chunks retain their source color and redeposit material where they settle.
+There is no heightfield deformation, crater-generation function, temporary ejecta particle system, or redeposit/paint operation. The granular loop integrates gravity, constrains grains against a physical floor and world bounds, uses a spatial hash for neighboring-grain collision detection, and resolves sphere/sphere contact with restitution and friction.
 
-This is intentionally a first simulation architecture rather than a claim that every visible orb is already an independent rigid body. Tens of thousands of individual Godot rigid bodies would be the wrong scaling model; later iterations can move the granular solver toward GPU compute while retaining the interaction APIs established here.
+The four red/blue/yellow/green regions are only initial conditions. Color belongs to each grain and never changes when the grain moves.
+
+The projectile is still a Godot rigid body. While rolling through the granular region it transfers momentum into overlapping simulated grains. On detonation the sand interaction is only a radial velocity impulse applied to existing grains; those same grains then fly, collide, fall, and settle under the granular solver.
+
+The player is intentionally not coupled to the grain solver in this iteration. A collision layer used only by the player supplies a temporary support plane at the original sand surface height. This lets the bomb/sand simulation be evaluated without fake load-bearing behavior being added to the grain solver.
+
+The grain pool is fixed-size, so the sand interaction cannot leak spawned debris entities into the world. Numerical invalid-state guards restore an individual grain to its original position rather than allowing it to disappear into the void.
 
 ## Character placeholder
 
@@ -31,8 +37,10 @@ For local Windows development, run:
 ./tools/fetch_assets.ps1
 ```
 
-The player dynamically searches the imported KayKit model for a walk/run animation and a throw/attack animation. If named foot/ankle bones can be identified, their animated world positions drive footprint placement; otherwise a gait-timed fallback is used.
+The player dynamically selects idle, walk/run, and throw/attack animation clips from the imported KayKit model. Movement transitions cross-fade back to an idle pose rather than pausing midway through a walk cycle.
 
 ## Windows builds
 
-`.github/workflows/windows-build.yml` intentionally does **not** build on ordinary pushes. It runs for pull-request commits (open/synchronize/reopen) and manual dispatches, exports an embedded-PCK Windows x86-64 `SandGame.exe`, and uploads the executable as a workflow artifact.
+`.github/workflows/windows-build.yml` intentionally does **not** build on ordinary pushes. It runs for pull-request commits (open/synchronize/reopen) and optional manual dispatches, exports an embedded-PCK Windows x86-64 `SandGame.exe`, and uploads the executable as a workflow artifact.
+
+The workflow treats Godot script compilation/runtime errors as failures and performs a short headless runtime smoke test before export.

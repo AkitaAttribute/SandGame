@@ -1,13 +1,27 @@
 class_name SandField
 extends Node3D
 
-const GRID_SIZE := 72
-const SPACING := 0.30
+const GRAVITY := 6.867
+const GRAIN_RADIUS := 0.070
+const GRAIN_DIAMETER := GRAIN_RADIUS * 2.0
+const GRAIN_MASS := 0.025
+const PACKING_SPACING := GRAIN_DIAMETER * 0.99
+const PARTICLES_X := 32
+const PARTICLES_Z := 32
 const LAYERS := 3
-const GRAIN_RADIUS := 0.17
-const HALF_EXTENT := (GRID_SIZE - 1) * SPACING * 0.5
-const MIN_HEIGHT := -1.35
-const BASE_HEIGHT := 0.35
+const PARTICLE_COUNT := PARTICLES_X * PARTICLES_Z * LAYERS
+const INITIAL_HALF_EXTENT := (PARTICLES_X - 1) * PACKING_SPACING * 0.5
+const WORLD_HALF_EXTENT := INITIAL_HALF_EXTENT + 1.55
+const PLAYER_SURFACE_Y := GRAIN_RADIUS * 2.0 + (LAYERS - 1) * PACKING_SPACING + 0.018
+const CELL_SIZE := GRAIN_DIAMETER * 1.08
+const AIR_DRAG := 0.055
+const FLOOR_FRICTION_RATE := 5.5
+const WALL_RESTITUTION := 0.16
+const GRAIN_RESTITUTION := 0.045
+const GRAIN_FRICTION := 0.42
+const POSITION_CORRECTION := 0.92
+const SUBSTEPS := 2
+const SOLVER_ITERATIONS := 1
 const PALETTE := [
     Color(0.86, 0.18, 0.15),
     Color(0.15, 0.38, 0.92),
@@ -15,293 +29,264 @@ const PALETTE := [
     Color(0.18, 0.72, 0.31),
 ]
 
-var heights := PackedFloat32Array()
+var positions := PackedVector3Array()
+var velocities := PackedVector3Array()
+var rest_positions := PackedVector3Array()
 var colors := PackedInt32Array()
+var buckets: Dictionary = {}
 var multimesh_instance: MultiMeshInstance3D
 var multimesh: MultiMesh
-var height_shape: HeightMapShape3D
-var collision_shape: CollisionShape3D
 var rng := RandomNumberGenerator.new()
-var collision_refresh_queued := false
 
 func _ready() -> void:
     add_to_group("sand")
     rng.seed = 7331
-    _initialize_field()
+    _initialize_particles()
     _build_multimesh()
-    _build_collision()
+    _update_visuals()
 
-func _initialize_field() -> void:
-    var count: int = GRID_SIZE * GRID_SIZE
-    heights.resize(count)
-    colors.resize(count)
+func _physics_process(delta: float) -> void:
+    var frame_dt: float = minf(delta, 1.0 / 30.0)
+    var step_dt: float = frame_dt / float(SUBSTEPS)
+    for _substep in range(SUBSTEPS):
+        _integrate(step_dt)
+        _constrain_all(step_dt, true)
+        for solver_iteration in range(SOLVER_ITERATIONS):
+            _build_spatial_hash()
+            _solve_grain_contacts()
+            _constrain_all(step_dt, solver_iteration == 0)
+    _update_visuals()
 
-    for z in range(GRID_SIZE):
-        for x in range(GRID_SIZE):
-            var i: int = _index(x, z)
-            var wx: float = _world_x(x)
-            var wz: float = _world_z(z)
-            heights[i] = BASE_HEIGHT + sin(wx * 0.34) * 0.018 + cos(wz * 0.29) * 0.018 + rng.randf_range(-0.012, 0.012)
-            if wx < 0.0 and wz < 0.0:
-                colors[i] = 0
-            elif wx >= 0.0 and wz < 0.0:
-                colors[i] = 1
-            elif wx < 0.0 and wz >= 0.0:
-                colors[i] = 2
-            else:
-                colors[i] = 3
+func _initialize_particles() -> void:
+    positions.resize(PARTICLE_COUNT)
+    velocities.resize(PARTICLE_COUNT)
+    rest_positions.resize(PARTICLE_COUNT)
+    colors.resize(PARTICLE_COUNT)
+    var index: int = 0
+    for layer in range(LAYERS):
+        var layer_offset: float = GRAIN_RADIUS * 0.46 if (layer % 2) == 1 else 0.0
+        for z in range(PARTICLES_Z):
+            for x in range(PARTICLES_X):
+                var px: float = (float(x) - float(PARTICLES_X - 1) * 0.5) * PACKING_SPACING + layer_offset
+                var pz: float = (float(z) - float(PARTICLES_Z - 1) * 0.5) * PACKING_SPACING + layer_offset
+                var py: float = GRAIN_RADIUS + float(layer) * PACKING_SPACING
+                var p := Vector3(px + rng.randf_range(-0.0025, 0.0025), py, pz + rng.randf_range(-0.0025, 0.0025))
+                positions[index] = p
+                rest_positions[index] = p
+                velocities[index] = Vector3.ZERO
+                colors[index] = _initial_color_index(p)
+                index += 1
+
+func _initial_color_index(position: Vector3) -> int:
+    if position.x < 0.0 and position.z < 0.0:
+        return 0
+    if position.x >= 0.0 and position.z < 0.0:
+        return 1
+    if position.x < 0.0 and position.z >= 0.0:
+        return 2
+    return 3
 
 func _build_multimesh() -> void:
     multimesh_instance = MultiMeshInstance3D.new()
-    multimesh_instance.name = "SandOrbs"
+    multimesh_instance.name = "SimulatedSandGrains"
     add_child(multimesh_instance)
-
     var sphere := SphereMesh.new()
     sphere.radius = GRAIN_RADIUS
-    sphere.height = GRAIN_RADIUS * 2.0
+    sphere.height = GRAIN_DIAMETER
     sphere.radial_segments = 6
     sphere.rings = 4
-
     var material := StandardMaterial3D.new()
     material.vertex_color_use_as_albedo = true
-    material.roughness = 0.96
+    material.roughness = 0.97
     sphere.material = material
-
     multimesh = MultiMesh.new()
     multimesh.transform_format = MultiMesh.TRANSFORM_3D
     multimesh.use_colors = true
     multimesh.mesh = sphere
-    multimesh.instance_count = GRID_SIZE * GRID_SIZE * LAYERS
+    multimesh.instance_count = PARTICLE_COUNT
     multimesh_instance.multimesh = multimesh
+    for i in range(PARTICLE_COUNT):
+        multimesh.set_instance_color(i, PALETTE[colors[i]])
 
-    for z in range(GRID_SIZE):
-        for x in range(GRID_SIZE):
-            _update_cell_visual(_index(x, z))
+func _integrate(dt: float) -> void:
+    var drag: float = 1.0 / (1.0 + AIR_DRAG * dt)
+    for i in range(PARTICLE_COUNT):
+        var velocity: Vector3 = velocities[i]
+        var position: Vector3 = positions[i]
+        velocity.y -= GRAVITY * dt
+        velocity *= drag
+        position += velocity * dt
+        positions[i] = position
+        velocities[i] = velocity
 
-func _build_collision() -> void:
-    var body := StaticBody3D.new()
-    body.name = "SandCollision"
-    add_child(body)
+func _constrain_all(dt: float, apply_floor_friction: bool) -> void:
+    var floor_drag: float = maxf(0.0, 1.0 - FLOOR_FRICTION_RATE * dt)
+    var limit: float = WORLD_HALF_EXTENT - GRAIN_RADIUS
+    for i in range(PARTICLE_COUNT):
+        var position: Vector3 = positions[i]
+        var velocity: Vector3 = velocities[i]
+        if _vector_is_invalid(position) or _vector_is_invalid(velocity):
+            positions[i] = rest_positions[i]
+            velocities[i] = Vector3.ZERO
+            continue
+        if position.y < GRAIN_RADIUS:
+            position.y = GRAIN_RADIUS
+            if velocity.y < 0.0:
+                velocity.y = -velocity.y * GRAIN_RESTITUTION
+            if apply_floor_friction:
+                velocity.x *= floor_drag
+                velocity.z *= floor_drag
+                if absf(velocity.y) < 0.018:
+                    velocity.y = 0.0
+                if Vector2(velocity.x, velocity.z).length_squared() < 0.00005:
+                    velocity.x = 0.0
+                    velocity.z = 0.0
+        if position.x < -limit:
+            position.x = -limit
+            if velocity.x < 0.0:
+                velocity.x = -velocity.x * WALL_RESTITUTION
+        elif position.x > limit:
+            position.x = limit
+            if velocity.x > 0.0:
+                velocity.x = -velocity.x * WALL_RESTITUTION
+        if position.z < -limit:
+            position.z = -limit
+            if velocity.z < 0.0:
+                velocity.z = -velocity.z * WALL_RESTITUTION
+        elif position.z > limit:
+            position.z = limit
+            if velocity.z > 0.0:
+                velocity.z = -velocity.z * WALL_RESTITUTION
+        positions[i] = position
+        velocities[i] = velocity
 
-    collision_shape = CollisionShape3D.new()
-    collision_shape.name = "HeightMap"
-    collision_shape.scale = Vector3(SPACING, 1.0, SPACING)
-    body.add_child(collision_shape)
+func _vector_is_invalid(value: Vector3) -> bool:
+    return is_nan(value.x) or is_nan(value.y) or is_nan(value.z) or is_inf(value.x) or is_inf(value.y) or is_inf(value.z)
 
-    height_shape = HeightMapShape3D.new()
-    height_shape.map_width = GRID_SIZE
-    height_shape.map_depth = GRID_SIZE
-    height_shape.map_data = heights.duplicate()
-    collision_shape.shape = height_shape
+func _build_spatial_hash() -> void:
+    buckets.clear()
+    for i in range(PARTICLE_COUNT):
+        var cell: Vector3i = _cell_for_position(positions[i])
+        if not buckets.has(cell):
+            buckets[cell] = []
+        var bucket: Array = buckets[cell]
+        bucket.append(i)
 
-func surface_height_at(world_position: Vector3) -> float:
-    var gx: float = clampf(world_position.x / SPACING + float(GRID_SIZE - 1) * 0.5, 0.0, float(GRID_SIZE) - 1.001)
-    var gz: float = clampf(world_position.z / SPACING + float(GRID_SIZE - 1) * 0.5, 0.0, float(GRID_SIZE) - 1.001)
-    var x0: int = int(floor(gx))
-    var z0: int = int(floor(gz))
-    var x1: int = mini(x0 + 1, GRID_SIZE - 1)
-    var z1: int = mini(z0 + 1, GRID_SIZE - 1)
-    var tx: float = gx - float(x0)
-    var tz: float = gz - float(z0)
-    var h00: float = heights[_index(x0, z0)]
-    var h10: float = heights[_index(x1, z0)]
-    var h01: float = heights[_index(x0, z1)]
-    var h11: float = heights[_index(x1, z1)]
-    return lerpf(lerpf(h00, h10, tx), lerpf(h01, h11, tx), tz)
+func _cell_for_position(position: Vector3) -> Vector3i:
+    return Vector3i(int(floor(position.x / CELL_SIZE)), int(floor(position.y / CELL_SIZE)), int(floor(position.z / CELL_SIZE)))
+
+func _solve_grain_contacts() -> void:
+    for i in range(PARTICLE_COUNT):
+        var cell: Vector3i = _cell_for_position(positions[i])
+        for oy in range(-1, 2):
+            for oz in range(-1, 2):
+                for ox in range(-1, 2):
+                    var neighbor_cell := Vector3i(cell.x + ox, cell.y + oy, cell.z + oz)
+                    if not buckets.has(neighbor_cell):
+                        continue
+                    var bucket: Array = buckets[neighbor_cell]
+                    for value in bucket:
+                        var j: int = int(value)
+                        if j <= i:
+                            continue
+                        _resolve_grain_pair(i, j)
+
+func _resolve_grain_pair(i: int, j: int) -> void:
+    var a: Vector3 = positions[i]
+    var b: Vector3 = positions[j]
+    var delta: Vector3 = b - a
+    var distance_squared: float = delta.length_squared()
+    var minimum_distance_squared: float = GRAIN_DIAMETER * GRAIN_DIAMETER
+    if distance_squared >= minimum_distance_squared:
+        return
+    var normal: Vector3
+    var distance: float
+    if distance_squared < 0.00000001:
+        normal = Vector3.RIGHT if ((i + j) % 2) == 0 else Vector3.FORWARD
+        distance = 0.0001
+    else:
+        distance = sqrt(distance_squared)
+        normal = delta / distance
+    var penetration: float = GRAIN_DIAMETER - distance
+    var correction: Vector3 = normal * penetration * 0.5 * POSITION_CORRECTION
+    a -= correction
+    b += correction
+    var velocity_a: Vector3 = velocities[i]
+    var velocity_b: Vector3 = velocities[j]
+    var relative_velocity: Vector3 = velocity_b - velocity_a
+    var normal_speed: float = relative_velocity.dot(normal)
+    if normal_speed < 0.0:
+        var normal_impulse_speed: float = -(1.0 + GRAIN_RESTITUTION) * normal_speed * 0.5
+        velocity_a -= normal * normal_impulse_speed
+        velocity_b += normal * normal_impulse_speed
+        var tangent: Vector3 = relative_velocity - normal * normal_speed
+        var tangent_length: float = tangent.length()
+        if tangent_length > 0.0001:
+            var tangent_direction: Vector3 = tangent / tangent_length
+            var friction_speed: float = minf(tangent_length * 0.5, normal_impulse_speed * GRAIN_FRICTION)
+            velocity_a += tangent_direction * friction_speed
+            velocity_b -= tangent_direction * friction_speed
+    positions[i] = a
+    positions[j] = b
+    velocities[i] = velocity_a
+    velocities[j] = velocity_b
+
+func apply_radial_impulse(center: Vector3, radius: float = 1.65, impulse_speed: float = 8.5) -> void:
+    var radius_squared: float = radius * radius
+    for i in range(PARTICLE_COUNT):
+        var offset: Vector3 = positions[i] - center
+        var distance_squared: float = offset.length_squared()
+        if distance_squared >= radius_squared:
+            continue
+        var distance: float = sqrt(maxf(distance_squared, 0.000001))
+        var direction: Vector3 = offset / distance
+        var falloff: float = pow(1.0 - distance / radius, 1.25)
+        var delta_velocity: float = impulse_speed * (0.16 + 0.84 * falloff)
+        velocities[i] += direction * delta_velocity
+
+func interact_sphere(center: Vector3, radius: float, body_velocity: Vector3, _body_mass: float, _dt: float) -> Vector3:
+    var reaction_impulse := Vector3.ZERO
+    var minimum_distance: float = radius + GRAIN_RADIUS
+    var minimum_distance_squared: float = minimum_distance * minimum_distance
+    for i in range(PARTICLE_COUNT):
+        var offset: Vector3 = positions[i] - center
+        var distance_squared: float = offset.length_squared()
+        if distance_squared >= minimum_distance_squared:
+            continue
+        var normal: Vector3
+        var distance: float
+        if distance_squared < 0.00000001:
+            normal = Vector3.UP
+            distance = 0.0001
+        else:
+            distance = sqrt(distance_squared)
+            normal = offset / distance
+        var penetration: float = minimum_distance - distance
+        var position: Vector3 = positions[i] + normal * penetration * 0.92
+        var grain_velocity: Vector3 = velocities[i]
+        var closing_speed: float = (body_velocity - grain_velocity).dot(normal)
+        if closing_speed > 0.0:
+            var transfer_delta_velocity: Vector3 = normal * closing_speed * 0.72
+            grain_velocity += transfer_delta_velocity
+            reaction_impulse -= transfer_delta_velocity * GRAIN_MASS
+        positions[i] = position
+        velocities[i] = grain_velocity
+    return reaction_impulse
+
+func surface_height_at(_world_position: Vector3) -> float:
+    return PLAYER_SURFACE_Y
 
 func clamp_inside(world_position: Vector3) -> Vector3:
-    world_position.x = clampf(world_position.x, -HALF_EXTENT + 0.65, HALF_EXTENT - 0.65)
-    world_position.z = clampf(world_position.z, -HALF_EXTENT + 0.65, HALF_EXTENT - 0.65)
+    var player_limit: float = WORLD_HALF_EXTENT - 0.65
+    world_position.x = clampf(world_position.x, -player_limit, player_limit)
+    world_position.z = clampf(world_position.z, -player_limit, player_limit)
     return world_position
 
-func apply_footprint(world_position: Vector3, yaw: float, side: int) -> void:
-    var foot_half_width: float = 0.22
-    var foot_half_length: float = 0.34
-    var depth: float = 0.075
-    var touched: Dictionary = {}
-    var ring: Array[int] = []
-    var removed: float = 0.0
-    var center_x: int = int(round(world_position.x / SPACING + float(GRID_SIZE - 1) * 0.5))
-    var center_z: int = int(round(world_position.z / SPACING + float(GRID_SIZE - 1) * 0.5))
-    var reach: int = 3
-    var c: float = cos(-yaw)
-    var s: float = sin(-yaw)
+func grain_count() -> int:
+    return PARTICLE_COUNT
 
-    for z in range(maxi(0, center_z - reach), mini(GRID_SIZE, center_z + reach + 1)):
-        for x in range(maxi(0, center_x - reach), mini(GRID_SIZE, center_x + reach + 1)):
-            var dx: float = _world_x(x) - world_position.x
-            var dz: float = _world_z(z) - world_position.z
-            var local_x: float = dx * c - dz * s
-            var local_z: float = dx * s + dz * c
-            var normalized: float = sqrt(pow(local_x / foot_half_width, 2.0) + pow(local_z / foot_half_length, 2.0))
-            var i: int = _index(x, z)
-            if normalized <= 1.0:
-                var cut: float = depth * (1.0 - smoothstep(0.15, 1.0, normalized))
-                cut = maxf(cut, depth * 0.18)
-                var old_height: float = heights[i]
-                heights[i] = maxf(MIN_HEIGHT, heights[i] - cut)
-                removed += old_height - heights[i]
-                touched[i] = true
-            elif normalized <= 1.65:
-                ring.append(i)
-
-    if not ring.is_empty() and removed > 0.0:
-        var lip_each: float = removed * 0.68 / float(ring.size())
-        for i in ring:
-            heights[i] += lip_each
-            touched[i] = true
-
-    for i in touched.keys():
-        _update_cell_visual(int(i))
-    _queue_collision_refresh()
-
-func apply_explosion(center: Vector3, radius: float = 2.6, blast_strength: float = 12.0) -> void:
-    var touched: Dictionary = {}
-    var impacted: Array[int] = []
-    var ring: Array[int] = []
-    var source_heights: Dictionary = {}
-    var source_distances: Dictionary = {}
-    var removed: float = 0.0
-    var cell_radius: int = int(ceil(radius / SPACING)) + 2
-    var center_x: int = int(round(center.x / SPACING + float(GRID_SIZE - 1) * 0.5))
-    var center_z: int = int(round(center.z / SPACING + float(GRID_SIZE - 1) * 0.5))
-
-    for z in range(maxi(0, center_z - cell_radius), mini(GRID_SIZE, center_z + cell_radius + 1)):
-        for x in range(maxi(0, center_x - cell_radius), mini(GRID_SIZE, center_x + cell_radius + 1)):
-            var dx: float = _world_x(x) - center.x
-            var dz: float = _world_z(z) - center.z
-            var distance: float = sqrt(dx * dx + dz * dz)
-            var i: int = _index(x, z)
-            if distance < radius:
-                var falloff: float = 1.0 - distance / radius
-                var cut: float = 0.92 * falloff * falloff
-                var old_height: float = heights[i]
-                heights[i] = maxf(MIN_HEIGHT, heights[i] - cut)
-                var cell_removed: float = old_height - heights[i]
-                if cell_removed > 0.0001:
-                    removed += cell_removed
-                    impacted.append(i)
-                    source_heights[i] = old_height
-                    source_distances[i] = distance
-                    touched[i] = true
-            elif distance < radius * 1.38:
-                ring.append(i)
-
-    # Only a small fraction is placed instantly at the rim. Most excavated material
-    # becomes physical airborne aggregate grains and returns through deposit().
-    if not ring.is_empty() and removed > 0.0:
-        var berm_each: float = removed * 0.07 / float(ring.size())
-        for i in ring:
-            heights[i] += berm_each
-            touched[i] = true
-
-    for i in touched.keys():
-        _update_cell_visual(int(i))
-    _queue_collision_refresh()
-
-    if impacted.is_empty() or removed <= 0.0:
-        return
-
-    var chunk_count: int = mini(300, maxi(150, impacted.size() + int(impacted.size() * 0.35)))
-    var deposit_each: float = removed * 0.86 / float(maxi(1, chunk_count))
-    for n in range(chunk_count):
-        var i: int = impacted[rng.randi_range(0, impacted.size() - 1)]
-        var x: int = i % GRID_SIZE
-        var z: int = int(i / GRID_SIZE)
-        var source_height: float = float(source_heights.get(i, heights[i]))
-        var source_distance: float = float(source_distances.get(i, radius * 0.5))
-        var distance_ratio: float = clampf(source_distance / radius, 0.0, 1.0)
-
-        var start := Vector3(
-            _world_x(x) + rng.randf_range(-SPACING * 0.22, SPACING * 0.22),
-            source_height + rng.randf_range(0.22, 0.42),
-            _world_z(z) + rng.randf_range(-SPACING * 0.22, SPACING * 0.22)
-        )
-        var horizontal := Vector3(start.x - center.x, 0.0, start.z - center.z)
-        if horizontal.length_squared() < 0.001:
-            horizontal = Vector3(rng.randf_range(-1.0, 1.0), 0.0, rng.randf_range(-1.0, 1.0))
-        horizontal = horizontal.normalized()
-
-        var horizontal_weight: float = lerpf(0.48, 1.30, distance_ratio)
-        var vertical_weight: float = lerpf(1.55, 0.62, distance_ratio)
-        vertical_weight *= rng.randf_range(0.88, 1.18)
-        horizontal_weight *= rng.randf_range(0.86, 1.16)
-        var direction: Vector3 = (horizontal * horizontal_weight + Vector3.UP * vertical_weight).normalized()
-        var speed: float = blast_strength * lerpf(0.88, 0.48, distance_ratio) * rng.randf_range(0.82, 1.16)
-
-        var chunk := SandChunk.new()
-        chunk.sand = self
-        chunk.deposit_amount = deposit_each
-        chunk.grain_color = PALETTE[colors[i]]
-        get_tree().current_scene.add_child(chunk)
-        chunk.global_position = start
-        chunk.apply_central_impulse(direction * speed * chunk.mass)
-
-func deposit(world_position: Vector3, amount: float, grain_color: Color) -> void:
-    if abs(world_position.x) > HALF_EXTENT or abs(world_position.z) > HALF_EXTENT:
-        return
-
-    var color_index: int = _nearest_palette_index(grain_color)
-    var center_x: int = int(round(world_position.x / SPACING + float(GRID_SIZE - 1) * 0.5))
-    var center_z: int = int(round(world_position.z / SPACING + float(GRID_SIZE - 1) * 0.5))
-    var targets: Array[int] = []
-    for z in range(maxi(0, center_z - 1), mini(GRID_SIZE, center_z + 2)):
-        for x in range(maxi(0, center_x - 1), mini(GRID_SIZE, center_x + 2)):
-            targets.append(_index(x, z))
-
-    if targets.is_empty():
-        return
-
-    var each: float = amount / float(targets.size())
-    for i in targets:
-        heights[i] += each
-        if each > 0.004 or rng.randf() < 0.45:
-            colors[i] = color_index
-        _update_cell_visual(i)
-    _queue_collision_refresh()
-
-func _nearest_palette_index(color: Color) -> int:
-    var best: int = 0
-    var best_distance: float = INF
-    for i in range(PALETTE.size()):
-        var delta := Vector3(color.r - PALETTE[i].r, color.g - PALETTE[i].g, color.b - PALETTE[i].b)
-        var distance: float = delta.length_squared()
-        if distance < best_distance:
-            best_distance = distance
-            best = i
-    return best
-
-func _update_cell_visual(i: int) -> void:
+func _update_visuals() -> void:
     if multimesh == null:
         return
-    var x: int = i % GRID_SIZE
-    var z: int = int(i / GRID_SIZE)
-    for layer in range(LAYERS):
-        var instance_index: int = i * LAYERS + layer
-        var y: float = heights[i] - float(layer) * GRAIN_RADIUS * 1.28
-        var transform := Transform3D(Basis.IDENTITY, Vector3(_world_x(x), y, _world_z(z)))
-        multimesh.set_instance_transform(instance_index, transform)
-        multimesh.set_instance_color(instance_index, PALETTE[colors[i]])
-
-func _queue_collision_refresh() -> void:
-    if collision_refresh_queued:
-        return
-    collision_refresh_queued = true
-    call_deferred("_flush_collision_refresh")
-
-func _flush_collision_refresh() -> void:
-    collision_refresh_queued = false
-    _refresh_collision()
-
-func _refresh_collision() -> void:
-    if height_shape != null:
-        height_shape.map_data = heights.duplicate()
-
-func _index(x: int, z: int) -> int:
-    return z * GRID_SIZE + x
-
-func _world_x(x: int) -> float:
-    return (float(x) - float(GRID_SIZE - 1) * 0.5) * SPACING
-
-func _world_z(z: int) -> float:
-    return (float(z) - float(GRID_SIZE - 1) * 0.5) * SPACING
+    for i in range(PARTICLE_COUNT):
+        multimesh.set_instance_transform(i, Transform3D(Basis.IDENTITY, positions[i]))
