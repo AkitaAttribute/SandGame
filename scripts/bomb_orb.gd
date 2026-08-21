@@ -62,7 +62,13 @@ func _physics_process(delta: float) -> void:
         sand = get_tree().get_first_node_in_group("sand") as SandField
         return
 
-    var reaction_impulse: Vector3 = sand.interact_sphere(global_position, ORB_RADIUS, linear_velocity, mass, delta)
+    var reaction_impulse: Vector3 = sand.interact_sphere(
+        global_position,
+        ORB_RADIUS,
+        linear_velocity,
+        mass,
+        delta
+    )
     if reaction_impulse.length_squared() > 0.0000001:
         apply_central_impulse(reaction_impulse)
 
@@ -92,7 +98,7 @@ func _detonate() -> void:
     if sand == null:
         sand = get_tree().get_first_node_in_group("sand") as SandField
     if sand != null:
-        sand.apply_radial_impulse(global_position, 1.65, 8.5)
+        sand.apply_radial_impulse(global_position, 2.7, 8.5)
 
     for node in get_tree().get_nodes_in_group("player"):
         if node is PlayerController:
@@ -100,7 +106,9 @@ func _detonate() -> void:
             var distance: float = maxf(0.35, offset.length())
             if distance < 4.8:
                 var falloff: float = pow(1.0 - distance / 4.8, 2.0)
-                var direction: Vector3 = (offset.normalized() + Vector3.UP * 0.42).normalized()
+                var direction: Vector3 = (
+                    offset.normalized() + Vector3.UP * 0.42
+                ).normalized()
                 node.apply_impulse(direction * 54.0 * falloff)
 
     for node in get_tree().get_nodes_in_group("physics_projectiles"):
@@ -110,6 +118,10 @@ func _detonate() -> void:
         var distance: float = maxf(0.35, offset.length())
         if distance < 4.2:
             var falloff: float = pow(1.0 - distance / 4.2, 2.0)
-            node.apply_central_impulse((offset.normalized() + Vector3.UP * 0.3).normalized() * 8.0 * falloff)
+            node.apply_central_impulse(
+                (offset.normalized() + Vector3.UP * 0.3).normalized()
+                * 8.0
+                * falloff
+            )
 
     queue_free()
