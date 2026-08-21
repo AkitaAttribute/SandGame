@@ -98,21 +98,21 @@ void apply_external_commands(uint id, inout vec3 p, inout vec3 v) {
             float falloff = pow(max(0.0, 1.0 - distance / radius), 1.25);
             float speed = b.x * (0.10 + 0.90 * falloff);
             v += normal * speed;
-        } else {
-            float minimum_distance = radius + pc.grain_radius;
-            if (distance_squared >= minimum_distance * minimum_distance) {
-                continue;
-            }
+            continue;
+        }
 
-            float distance = sqrt(max(distance_squared, 1e-8));
-            vec3 normal = distance > 1e-4
-                ? offset / distance
-                : vec3(0.0, -1.0, 0.0);
-            float penetration = minimum_distance - distance;
+        float minimum_distance = radius + pc.grain_radius;
+        if (distance_squared >= minimum_distance * minimum_distance) {
+            continue;
+        }
 
-            // External bodies no longer behave like infinitely strong cutters.
-            // The packed bed only yields part of the overlap on the grain side;
-            // the body receives the complementary reaction on the CPU side.
+        float distance = sqrt(max(distance_squared, 1e-8));
+        vec3 normal = distance > 1e-4
+            ? offset / distance
+            : vec3(0.0, -1.0, 0.0);
+        float penetration = minimum_distance - distance;
+
+        if (mode < 2.5) {
             p += normal * penetration * 0.28;
 
             float closing_speed = dot(b.xyz - v, normal);
@@ -121,7 +121,30 @@ void apply_external_commands(uint id, inout vec3 p, inout vec3 v) {
             }
 
             v += normal * (penetration / max(pc.dt, 1e-4)) * 0.07;
+            continue;
         }
+
+        vec3 lateral = vec3(offset.x, 0.0, offset.z);
+        float lateral_length = length(lateral);
+        vec3 lateral_normal;
+        if (lateral_length > 1e-5) {
+            lateral_normal = lateral / lateral_length;
+        } else {
+            vec3 travel = vec3(b.x, 0.0, b.z);
+            float travel_length = length(travel);
+            lateral_normal = travel_length > 1e-5
+                ? -travel / travel_length
+                : vec3(1.0, 0.0, 0.0);
+        }
+
+        float lateral_shift = min(penetration * 0.10, 0.0045);
+        float downward_compaction = min(penetration * 0.025, 0.0015);
+        vec3 displacement = lateral_normal * lateral_shift;
+        displacement.y -= downward_compaction;
+
+        p += displacement;
+        previous_positions[id].xyz += displacement;
+        v.xz *= 0.96;
     }
 }
 
@@ -218,8 +241,6 @@ void phase_solve(uint id) {
                     float tangent_length = length(tangent);
 
                     if (tangent_length > 1e-5) {
-                        // Static friction first: small tangential motion is
-                        // completely cancelled while the contact force can hold it.
                         float static_limit = pc.friction * 1.35 * penetration;
                         if (tangent_length <= static_limit) {
                             correction -= tangent * 0.5;

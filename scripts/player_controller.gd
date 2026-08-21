@@ -135,50 +135,30 @@ func _throw_projectile() -> void:
     throw_locked = true
     _play_throw()
 
-    var aim_direction: Vector3 = _aim_direction()
-    if aim_direction.length_squared() < 0.01:
-        aim_direction = -global_basis.z
-
-    var flat := Vector3(aim_direction.x, 0.0, aim_direction.z)
-    if flat.length_squared() > 0.001:
-        rotation.y = atan2(-flat.x, -flat.z)
+    var forward := -global_basis.z
+    forward.y = 0.0
+    if forward.length_squared() < 0.0001:
+        forward = Vector3.FORWARD
+    else:
+        forward = forward.normalized()
 
     await get_tree().create_timer(0.11).timeout
     if not is_inside_tree():
         return
 
     var orb := BombOrb.new()
-    var forward := -global_basis.z
     var right := global_basis.x
     get_tree().current_scene.add_child(orb)
     orb.global_position = global_position + Vector3.UP * 1.0 + forward * 0.48 + right * 0.15
 
-    var launch_velocity: Vector3 = aim_direction.normalized() * 8.7 + Vector3.UP * 2.8
+    var launch_velocity := forward * 8.7 + Vector3.UP * 2.8
     orb.apply_central_impulse(launch_velocity * orb.mass)
 
     await get_tree().create_timer(0.28).timeout
     throw_locked = false
 
 func _aim_direction() -> Vector3:
-    if aim_camera == null:
-        return -global_basis.z
-
-    var viewport := get_viewport()
-    var mouse := viewport.get_visible_rect().size * 0.5
-    if Input.mouse_mode == Input.MOUSE_MODE_VISIBLE:
-        mouse = viewport.get_mouse_position()
-
-    var origin := aim_camera.project_ray_origin(mouse)
-    var ray := aim_camera.project_ray_normal(mouse)
-    var target_y: float = sand.surface_height_at(global_position) if sand != null else global_position.y
-
-    if absf(ray.y) > 0.0001:
-        var t: float = (target_y - origin.y) / ray.y
-        if t > 0.0:
-            var target: Vector3 = origin + ray * t
-            return (target - (global_position + Vector3.UP * 0.8)).normalized()
-
-    return -aim_camera.global_basis.z
+    return -global_basis.z
 
 func _discover_animations() -> void:
     if animation_player == null:

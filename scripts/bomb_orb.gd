@@ -5,6 +5,8 @@ const FUSE_TIME := 3.0
 const BLUE := Color(0.08, 0.42, 1.0)
 const RED := Color(1.0, 0.08, 0.05)
 const ORB_RADIUS := 0.17
+const SAND_BLAST_RADIUS := 2.7
+const SAND_BLAST_SPEED := 12.5
 
 var elapsed := 0.0
 var flash_phase := 0.0
@@ -104,7 +106,11 @@ func _detonate() -> void:
     if sand == null:
         sand = get_tree().get_first_node_in_group("sand") as SandField
     if sand != null:
-        sand.apply_radial_impulse(global_position, 2.7, 8.5)
+        sand.apply_radial_impulse(
+            global_position,
+            SAND_BLAST_RADIUS,
+            SAND_BLAST_SPEED
+        )
 
     for node in get_tree().get_nodes_in_group("player"):
         if node is PlayerController:

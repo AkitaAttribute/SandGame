@@ -5,7 +5,8 @@ const PACKED_REACTION_SCALE := 3.6
 const BODY_CONTACT_FRICTION := 0.82
 const BODY_CONTACT_BIAS := 52.0
 const MAX_PACKED_REACTION_IMPULSE := 2.25
-const SURFACE_SAMPLE_RADIUS := 0.34
+const SURFACE_SAMPLE_RADIUS := 0.48
+const SURFACE_TOP_BAND := GRAIN_RADIUS * 0.80
 const PACKED_GRAIN_FRICTION := 0.72
 
 func _make_push_constants(
@@ -73,36 +74,57 @@ func interact_sphere(
 
     return reaction_impulse
 
+func interact_foot(
+    center: Vector3,
+    radius: float,
+    travel_velocity: Vector3
+) -> void:
+    var flat_velocity := Vector3(travel_velocity.x, 0.0, travel_velocity.z)
+    _queue_command(center, radius, flat_velocity, 3.0)
+
 func surface_height_at(world_position: Vector3) -> float:
     if cpu_positions.is_empty():
         return PLAYER_SURFACE_Y
 
     var radius_squared := SURFACE_SAMPLE_RADIUS * SURFACE_SAMPLE_RADIUS
-    var best_heights: Array[float] = []
+    var candidate_heights: Array[float] = []
+    var highest := -INF
 
-    for p in cpu_positions:
+    for i in range(PARTICLE_COUNT):
+        var p := cpu_positions[i]
         var dx := p.x - world_position.x
         var dz := p.z - world_position.z
         var horizontal_squared := dx * dx + dz * dz
         if horizontal_squared > radius_squared:
             continue
 
-        # An airborne grain should not become a temporary floor under an actor.
+        var grain_velocity := (
+            (cpu_positions[i] - cpu_previous_positions[i]) / SIM_DT
+        )
+        if grain_velocity.length_squared() > 2.25:
+            continue
+
         if p.y > world_position.y + 0.45:
             continue
 
-        best_heights.append(p.y + GRAIN_RADIUS)
+        var top := p.y + GRAIN_RADIUS
+        candidate_heights.append(top)
+        highest = maxf(highest, top)
 
-    if best_heights.is_empty():
+    if candidate_heights.is_empty():
         return GRAIN_RADIUS
 
-    best_heights.sort()
-    var sample_count := mini(4, best_heights.size())
     var total := 0.0
-    for i in range(sample_count):
-        total += best_heights[best_heights.size() - 1 - i]
+    var count := 0
+    var minimum_top := highest - SURFACE_TOP_BAND
+    for height in candidate_heights:
+        if height >= minimum_top:
+            total += height
+            count += 1
 
-    return total / float(sample_count)
+    if count == 0:
+        return highest
+    return total / float(count)
 
 func solver_name() -> String:
-    return "GPU PBD packed-contact" if gpu_ready else "GPU PBD unavailable"
+    return "GPU PBD smoothed-contact" if gpu_ready else "GPU PBD unavailable"
