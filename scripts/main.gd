@@ -32,30 +32,19 @@ func _ready() -> void:
 
 func _build_physical_floor() -> void:
     var floor_body := StaticBody3D.new()
-    floor_body.name = "BombAndSandFloor"
+    floor_body.name = "BombFloor"
     floor_body.collision_layer = 1
     floor_body.collision_mask = 1
     add_child(floor_body)
 
+    # The custom grain solver uses y=0 as its floor. Keep the Godot rigid-body
+    # floor aligned to that exact plane as an invisible collision surface.
     var collision := CollisionShape3D.new()
     var shape := BoxShape3D.new()
-    shape.size = Vector3(WORLD_FLOOR_SIZE, 0.10, WORLD_FLOOR_SIZE)
+    shape.size = Vector3(WORLD_FLOOR_SIZE, 0.02, WORLD_FLOOR_SIZE)
     collision.shape = shape
-    collision.position.y = -0.05
+    collision.position.y = -0.01
     floor_body.add_child(collision)
-
-    var mesh_instance := MeshInstance3D.new()
-    var mesh := BoxMesh.new()
-    mesh.size = Vector3(WORLD_FLOOR_SIZE, 0.10, WORLD_FLOOR_SIZE)
-
-    var material := StandardMaterial3D.new()
-    material.albedo_color = Color(0.20, 0.17, 0.14)
-    material.roughness = 1.0
-    mesh.material = material
-
-    mesh_instance.mesh = mesh
-    mesh_instance.position.y = -0.05
-    add_child(mesh_instance)
 
 func _build_player_support(surface_y: float) -> void:
     var support_body := StaticBody3D.new()
@@ -66,9 +55,9 @@ func _build_player_support(surface_y: float) -> void:
 
     var collision := CollisionShape3D.new()
     var shape := BoxShape3D.new()
-    shape.size = Vector3(WORLD_FLOOR_SIZE, 0.05, WORLD_FLOOR_SIZE)
+    shape.size = Vector3(WORLD_FLOOR_SIZE, 0.02, WORLD_FLOOR_SIZE)
     collision.shape = shape
-    collision.position.y = surface_y - 0.025
+    collision.position.y = surface_y - 0.01
     support_body.add_child(collision)
 
 func _build_lighting() -> void:

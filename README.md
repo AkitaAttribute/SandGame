@@ -21,9 +21,13 @@ There is no heightfield deformation, crater-generation function, temporary eject
 
 The four red/blue/yellow/green regions are only initial conditions. Color belongs to each grain and never changes when the grain moves.
 
+The grain solver now uses sleeping. The initial packed bed starts completely inactive, so an untouched desert consumes no granular integration or collision-solving work. Projectile contact and explosions wake only affected grains. Contact can propagate wakefulness into neighboring grains, and low-speed supported grains return to sleep after settling. Only grains whose transforms actually changed are resent to the MultiMesh renderer.
+
 The projectile is still a Godot rigid body. While rolling through the granular region it transfers momentum into overlapping simulated grains. On detonation the sand interaction is only a radial velocity impulse applied to existing grains; those same grains then fly, collide, fall, and settle under the granular solver.
 
 The player is intentionally not coupled to the grain solver in this iteration. A collision layer used only by the player supplies a temporary support plane at the original sand surface height. This lets the bomb/sand simulation be evaluated without fake load-bearing behavior being added to the grain solver.
+
+The custom grain floor and the Godot rigid-body floor are both aligned to y=0. The rigid-body floor is collision-only and has no visible brown box or decorative geometry.
 
 The grain pool is fixed-size, so the sand interaction cannot leak spawned debris entities into the world. Numerical invalid-state guards restore an individual grain to its original position rather than allowing it to disappear into the void.
 
