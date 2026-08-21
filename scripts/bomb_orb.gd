@@ -49,11 +49,11 @@ func _process(delta: float) -> void:
     if exploded:
         return
     elapsed += delta
-    var progress := clamp(elapsed / FUSE_TIME, 0.0, 1.0)
-    var flashes_per_second := lerp(1.4, 17.0, pow(progress, 3.15))
+    var progress: float = clampf(elapsed / FUSE_TIME, 0.0, 1.0)
+    var flashes_per_second: float = lerpf(1.4, 17.0, pow(progress, 3.15))
     flash_phase += delta * flashes_per_second
-    var red_now := fmod(flash_phase, 1.0) < lerp(0.24, 0.48, progress)
-    var color := RED if red_now else BLUE
+    var red_now: bool = fmod(flash_phase, 1.0) < lerpf(0.24, 0.48, progress)
+    var color: Color = RED if red_now else BLUE
     material.albedo_color = color
     material.emission = color * (0.85 if red_now else 0.55)
 
@@ -70,20 +70,20 @@ func _explode() -> void:
 
     for node in get_tree().get_nodes_in_group("player"):
         if node is PlayerController:
-            var offset := node.global_position - global_position
-            var distance := max(0.35, offset.length())
+            var offset: Vector3 = node.global_position - global_position
+            var distance: float = maxf(0.35, offset.length())
             if distance < 4.8:
-                var falloff := pow(1.0 - distance / 4.8, 2.0)
-                var direction := (offset.normalized() + Vector3.UP * 0.42).normalized()
+                var falloff: float = pow(1.0 - distance / 4.8, 2.0)
+                var direction: Vector3 = (offset.normalized() + Vector3.UP * 0.42).normalized()
                 node.apply_impulse(direction * 54.0 * falloff)
 
     for node in get_tree().get_nodes_in_group("physics_projectiles"):
         if node == self or not (node is RigidBody3D):
             continue
-        var offset := node.global_position - global_position
-        var distance := max(0.35, offset.length())
+        var offset: Vector3 = node.global_position - global_position
+        var distance: float = maxf(0.35, offset.length())
         if distance < 4.2:
-            var falloff := pow(1.0 - distance / 4.2, 2.0)
+            var falloff: float = pow(1.0 - distance / 4.2, 2.0)
             node.apply_central_impulse((offset.normalized() + Vector3.UP * 0.3).normalized() * 8.0 * falloff)
 
     queue_free()

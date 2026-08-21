@@ -31,15 +31,15 @@ func _ready() -> void:
     _build_collision()
 
 func _initialize_field() -> void:
-    var count := GRID_SIZE * GRID_SIZE
+    var count: int = GRID_SIZE * GRID_SIZE
     heights.resize(count)
     colors.resize(count)
 
     for z in range(GRID_SIZE):
         for x in range(GRID_SIZE):
-            var i := _index(x, z)
-            var wx := _world_x(x)
-            var wz := _world_z(z)
+            var i: int = _index(x, z)
+            var wx: float = _world_x(x)
+            var wz: float = _world_z(z)
             heights[i] = BASE_HEIGHT + sin(wx * 0.34) * 0.018 + cos(wz * 0.29) * 0.018 + rng.randf_range(-0.012, 0.012)
             if wx < 0.0 and wz < 0.0:
                 colors[i] = 0
@@ -94,58 +94,58 @@ func _build_collision() -> void:
     collision_shape.shape = height_shape
 
 func surface_height_at(world_position: Vector3) -> float:
-    var gx := clamp(world_position.x / SPACING + (GRID_SIZE - 1) * 0.5, 0.0, GRID_SIZE - 1.001)
-    var gz := clamp(world_position.z / SPACING + (GRID_SIZE - 1) * 0.5, 0.0, GRID_SIZE - 1.001)
-    var x0 := int(floor(gx))
-    var z0 := int(floor(gz))
-    var x1 := min(x0 + 1, GRID_SIZE - 1)
-    var z1 := min(z0 + 1, GRID_SIZE - 1)
-    var tx := gx - x0
-    var tz := gz - z0
-    var h00 := heights[_index(x0, z0)]
-    var h10 := heights[_index(x1, z0)]
-    var h01 := heights[_index(x0, z1)]
-    var h11 := heights[_index(x1, z1)]
-    return lerp(lerp(h00, h10, tx), lerp(h01, h11, tx), tz)
+    var gx: float = clampf(world_position.x / SPACING + float(GRID_SIZE - 1) * 0.5, 0.0, float(GRID_SIZE) - 1.001)
+    var gz: float = clampf(world_position.z / SPACING + float(GRID_SIZE - 1) * 0.5, 0.0, float(GRID_SIZE) - 1.001)
+    var x0: int = int(floor(gx))
+    var z0: int = int(floor(gz))
+    var x1: int = mini(x0 + 1, GRID_SIZE - 1)
+    var z1: int = mini(z0 + 1, GRID_SIZE - 1)
+    var tx: float = gx - float(x0)
+    var tz: float = gz - float(z0)
+    var h00: float = heights[_index(x0, z0)]
+    var h10: float = heights[_index(x1, z0)]
+    var h01: float = heights[_index(x0, z1)]
+    var h11: float = heights[_index(x1, z1)]
+    return lerpf(lerpf(h00, h10, tx), lerpf(h01, h11, tx), tz)
 
 func clamp_inside(world_position: Vector3) -> Vector3:
-    world_position.x = clamp(world_position.x, -HALF_EXTENT + 0.65, HALF_EXTENT - 0.65)
-    world_position.z = clamp(world_position.z, -HALF_EXTENT + 0.65, HALF_EXTENT - 0.65)
+    world_position.x = clampf(world_position.x, -HALF_EXTENT + 0.65, HALF_EXTENT - 0.65)
+    world_position.z = clampf(world_position.z, -HALF_EXTENT + 0.65, HALF_EXTENT - 0.65)
     return world_position
 
 func apply_footprint(world_position: Vector3, yaw: float, side: int) -> void:
-    var foot_half_width := 0.22
-    var foot_half_length := 0.34
-    var depth := 0.075
+    var foot_half_width: float = 0.22
+    var foot_half_length: float = 0.34
+    var depth: float = 0.075
     var touched: Dictionary = {}
     var ring: Array[int] = []
-    var removed := 0.0
-    var center_x := int(round(world_position.x / SPACING + (GRID_SIZE - 1) * 0.5))
-    var center_z := int(round(world_position.z / SPACING + (GRID_SIZE - 1) * 0.5))
-    var reach := 3
-    var c := cos(-yaw)
-    var s := sin(-yaw)
+    var removed: float = 0.0
+    var center_x: int = int(round(world_position.x / SPACING + float(GRID_SIZE - 1) * 0.5))
+    var center_z: int = int(round(world_position.z / SPACING + float(GRID_SIZE - 1) * 0.5))
+    var reach: int = 3
+    var c: float = cos(-yaw)
+    var s: float = sin(-yaw)
 
-    for z in range(max(0, center_z - reach), min(GRID_SIZE, center_z + reach + 1)):
-        for x in range(max(0, center_x - reach), min(GRID_SIZE, center_x + reach + 1)):
-            var dx := _world_x(x) - world_position.x
-            var dz := _world_z(z) - world_position.z
-            var local_x := dx * c - dz * s
-            var local_z := dx * s + dz * c
-            var normalized := sqrt(pow(local_x / foot_half_width, 2.0) + pow(local_z / foot_half_length, 2.0))
-            var i := _index(x, z)
+    for z in range(maxi(0, center_z - reach), mini(GRID_SIZE, center_z + reach + 1)):
+        for x in range(maxi(0, center_x - reach), mini(GRID_SIZE, center_x + reach + 1)):
+            var dx: float = _world_x(x) - world_position.x
+            var dz: float = _world_z(z) - world_position.z
+            var local_x: float = dx * c - dz * s
+            var local_z: float = dx * s + dz * c
+            var normalized: float = sqrt(pow(local_x / foot_half_width, 2.0) + pow(local_z / foot_half_length, 2.0))
+            var i: int = _index(x, z)
             if normalized <= 1.0:
-                var cut := depth * (1.0 - smoothstep(0.15, 1.0, normalized))
-                cut = max(cut, depth * 0.18)
-                var old_height := heights[i]
-                heights[i] = max(MIN_HEIGHT, heights[i] - cut)
+                var cut: float = depth * (1.0 - smoothstep(0.15, 1.0, normalized))
+                cut = maxf(cut, depth * 0.18)
+                var old_height: float = heights[i]
+                heights[i] = maxf(MIN_HEIGHT, heights[i] - cut)
                 removed += old_height - heights[i]
                 touched[i] = true
             elif normalized <= 1.65:
                 ring.append(i)
 
     if not ring.is_empty() and removed > 0.0:
-        var lip_each := removed * 0.68 / float(ring.size())
+        var lip_each: float = removed * 0.68 / float(ring.size())
         for i in ring:
             heights[i] += lip_each
             touched[i] = true
@@ -158,22 +158,22 @@ func apply_explosion(center: Vector3, radius: float = 2.6, blast_strength: float
     var touched: Dictionary = {}
     var impacted: Array[int] = []
     var ring: Array[int] = []
-    var removed := 0.0
-    var cell_radius := int(ceil(radius / SPACING)) + 2
-    var center_x := int(round(center.x / SPACING + (GRID_SIZE - 1) * 0.5))
-    var center_z := int(round(center.z / SPACING + (GRID_SIZE - 1) * 0.5))
+    var removed: float = 0.0
+    var cell_radius: int = int(ceil(radius / SPACING)) + 2
+    var center_x: int = int(round(center.x / SPACING + float(GRID_SIZE - 1) * 0.5))
+    var center_z: int = int(round(center.z / SPACING + float(GRID_SIZE - 1) * 0.5))
 
-    for z in range(max(0, center_z - cell_radius), min(GRID_SIZE, center_z + cell_radius + 1)):
-        for x in range(max(0, center_x - cell_radius), min(GRID_SIZE, center_x + cell_radius + 1)):
-            var dx := _world_x(x) - center.x
-            var dz := _world_z(z) - center.z
-            var distance := sqrt(dx * dx + dz * dz)
-            var i := _index(x, z)
+    for z in range(maxi(0, center_z - cell_radius), mini(GRID_SIZE, center_z + cell_radius + 1)):
+        for x in range(maxi(0, center_x - cell_radius), mini(GRID_SIZE, center_x + cell_radius + 1)):
+            var dx: float = _world_x(x) - center.x
+            var dz: float = _world_z(z) - center.z
+            var distance: float = sqrt(dx * dx + dz * dz)
+            var i: int = _index(x, z)
             if distance < radius:
-                var falloff := 1.0 - distance / radius
-                var cut := 0.82 * falloff * falloff
-                var old_height := heights[i]
-                heights[i] = max(MIN_HEIGHT, heights[i] - cut)
+                var falloff: float = 1.0 - distance / radius
+                var cut: float = 0.82 * falloff * falloff
+                var old_height: float = heights[i]
+                heights[i] = maxf(MIN_HEIGHT, heights[i] - cut)
                 removed += old_height - heights[i]
                 impacted.append(i)
                 touched[i] = true
@@ -181,7 +181,7 @@ func apply_explosion(center: Vector3, radius: float = 2.6, blast_strength: float
                 ring.append(i)
 
     if not ring.is_empty() and removed > 0.0:
-        var berm_each := removed * 0.50 / float(ring.size())
+        var berm_each: float = removed * 0.50 / float(ring.size())
         for i in ring:
             heights[i] += berm_each
             touched[i] = true
@@ -194,12 +194,12 @@ func apply_explosion(center: Vector3, radius: float = 2.6, blast_strength: float
         return
 
     impacted.shuffle()
-    var chunk_count := min(84, impacted.size())
-    var deposit_each := removed * 0.42 / float(max(1, chunk_count))
+    var chunk_count: int = mini(84, impacted.size())
+    var deposit_each: float = removed * 0.42 / float(maxi(1, chunk_count))
     for n in range(chunk_count):
-        var i := impacted[n]
-        var x := i % GRID_SIZE
-        var z := int(i / GRID_SIZE)
+        var i: int = impacted[n]
+        var x: int = i % GRID_SIZE
+        var z: int = int(i / GRID_SIZE)
         var start := Vector3(_world_x(x), heights[i] + 0.28, _world_z(z))
         var horizontal := Vector3(start.x - center.x, 0.0, start.z - center.z)
         if horizontal.length_squared() < 0.001:
@@ -218,18 +218,18 @@ func deposit(world_position: Vector3, amount: float, grain_color: Color) -> void
     if abs(world_position.x) > HALF_EXTENT or abs(world_position.z) > HALF_EXTENT:
         return
 
-    var color_index := _nearest_palette_index(grain_color)
-    var center_x := int(round(world_position.x / SPACING + (GRID_SIZE - 1) * 0.5))
-    var center_z := int(round(world_position.z / SPACING + (GRID_SIZE - 1) * 0.5))
+    var color_index: int = _nearest_palette_index(grain_color)
+    var center_x: int = int(round(world_position.x / SPACING + float(GRID_SIZE - 1) * 0.5))
+    var center_z: int = int(round(world_position.z / SPACING + float(GRID_SIZE - 1) * 0.5))
     var targets: Array[int] = []
-    for z in range(max(0, center_z - 1), min(GRID_SIZE, center_z + 2)):
-        for x in range(max(0, center_x - 1), min(GRID_SIZE, center_x + 2)):
+    for z in range(maxi(0, center_z - 1), mini(GRID_SIZE, center_z + 2)):
+        for x in range(maxi(0, center_x - 1), mini(GRID_SIZE, center_x + 2)):
             targets.append(_index(x, z))
 
     if targets.is_empty():
         return
 
-    var each := amount / float(targets.size())
+    var each: float = amount / float(targets.size())
     for i in targets:
         heights[i] += each
         if each > 0.004 or rng.randf() < 0.45:
@@ -238,11 +238,11 @@ func deposit(world_position: Vector3, amount: float, grain_color: Color) -> void
     _refresh_collision()
 
 func _nearest_palette_index(color: Color) -> int:
-    var best := 0
-    var best_distance := INF
+    var best: int = 0
+    var best_distance: float = INF
     for i in range(PALETTE.size()):
         var delta := Vector3(color.r - PALETTE[i].r, color.g - PALETTE[i].g, color.b - PALETTE[i].b)
-        var distance := delta.length_squared()
+        var distance: float = delta.length_squared()
         if distance < best_distance:
             best_distance = distance
             best = i
@@ -251,11 +251,11 @@ func _nearest_palette_index(color: Color) -> int:
 func _update_cell_visual(i: int) -> void:
     if multimesh == null:
         return
-    var x := i % GRID_SIZE
-    var z := int(i / GRID_SIZE)
+    var x: int = i % GRID_SIZE
+    var z: int = int(i / GRID_SIZE)
     for layer in range(LAYERS):
-        var instance_index := i * LAYERS + layer
-        var y := heights[i] - float(layer) * GRAIN_RADIUS * 1.28
+        var instance_index: int = i * LAYERS + layer
+        var y: float = heights[i] - float(layer) * GRAIN_RADIUS * 1.28
         var transform := Transform3D(Basis.IDENTITY, Vector3(_world_x(x), y, _world_z(z)))
         multimesh.set_instance_transform(instance_index, transform)
         multimesh.set_instance_color(instance_index, PALETTE[colors[i]])
@@ -268,7 +268,7 @@ func _index(x: int, z: int) -> int:
     return z * GRID_SIZE + x
 
 func _world_x(x: int) -> float:
-    return (float(x) - (GRID_SIZE - 1) * 0.5) * SPACING
+    return (float(x) - float(GRID_SIZE - 1) * 0.5) * SPACING
 
 func _world_z(z: int) -> float:
-    return (float(z) - (GRID_SIZE - 1) * 0.5) * SPACING
+    return (float(z) - float(GRID_SIZE - 1) * 0.5) * SPACING
