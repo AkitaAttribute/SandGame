@@ -22,6 +22,7 @@ var multimesh: MultiMesh
 var height_shape: HeightMapShape3D
 var collision_shape: CollisionShape3D
 var rng := RandomNumberGenerator.new()
+var collision_refresh_queued := false
 
 func _ready() -> void:
     add_to_group("sand")
@@ -152,12 +153,14 @@ func apply_footprint(world_position: Vector3, yaw: float, side: int) -> void:
 
     for i in touched.keys():
         _update_cell_visual(int(i))
-    _refresh_collision()
+    _queue_collision_refresh()
 
 func apply_explosion(center: Vector3, radius: float = 2.6, blast_strength: float = 12.0) -> void:
     var touched: Dictionary = {}
     var impacted: Array[int] = []
     var ring: Array[int] = []
+    var source_heights: Dictionary = {}
+    var source_distances: Dictionary = {}
     var removed: float = 0.0
     var cell_radius: int = int(ceil(radius / SPACING)) + 2
     var center_x: int = int(round(center.x / SPACING + float(GRID_SIZE - 1) * 0.5))
@@ -171,48 +174,68 @@ func apply_explosion(center: Vector3, radius: float = 2.6, blast_strength: float
             var i: int = _index(x, z)
             if distance < radius:
                 var falloff: float = 1.0 - distance / radius
-                var cut: float = 0.82 * falloff * falloff
+                var cut: float = 0.92 * falloff * falloff
                 var old_height: float = heights[i]
                 heights[i] = maxf(MIN_HEIGHT, heights[i] - cut)
-                removed += old_height - heights[i]
-                impacted.append(i)
-                touched[i] = true
-            elif distance < radius * 1.48:
+                var cell_removed: float = old_height - heights[i]
+                if cell_removed > 0.0001:
+                    removed += cell_removed
+                    impacted.append(i)
+                    source_heights[i] = old_height
+                    source_distances[i] = distance
+                    touched[i] = true
+            elif distance < radius * 1.38:
                 ring.append(i)
 
+    # Only a small fraction is placed instantly at the rim. Most excavated material
+    # becomes physical airborne aggregate grains and returns through deposit().
     if not ring.is_empty() and removed > 0.0:
-        var berm_each: float = removed * 0.50 / float(ring.size())
+        var berm_each: float = removed * 0.07 / float(ring.size())
         for i in ring:
             heights[i] += berm_each
             touched[i] = true
 
     for i in touched.keys():
         _update_cell_visual(int(i))
-    _refresh_collision()
+    _queue_collision_refresh()
 
     if impacted.is_empty() or removed <= 0.0:
         return
 
-    impacted.shuffle()
-    var chunk_count: int = mini(84, impacted.size())
-    var deposit_each: float = removed * 0.42 / float(maxi(1, chunk_count))
+    var chunk_count: int = mini(300, maxi(150, impacted.size() + int(impacted.size() * 0.35)))
+    var deposit_each: float = removed * 0.86 / float(maxi(1, chunk_count))
     for n in range(chunk_count):
-        var i: int = impacted[n]
+        var i: int = impacted[rng.randi_range(0, impacted.size() - 1)]
         var x: int = i % GRID_SIZE
         var z: int = int(i / GRID_SIZE)
-        var start := Vector3(_world_x(x), heights[i] + 0.28, _world_z(z))
+        var source_height: float = float(source_heights.get(i, heights[i]))
+        var source_distance: float = float(source_distances.get(i, radius * 0.5))
+        var distance_ratio: float = clampf(source_distance / radius, 0.0, 1.0)
+
+        var start := Vector3(
+            _world_x(x) + rng.randf_range(-SPACING * 0.22, SPACING * 0.22),
+            source_height + rng.randf_range(0.22, 0.42),
+            _world_z(z) + rng.randf_range(-SPACING * 0.22, SPACING * 0.22)
+        )
         var horizontal := Vector3(start.x - center.x, 0.0, start.z - center.z)
         if horizontal.length_squared() < 0.001:
             horizontal = Vector3(rng.randf_range(-1.0, 1.0), 0.0, rng.randf_range(-1.0, 1.0))
         horizontal = horizontal.normalized()
-        var direction := (horizontal * rng.randf_range(0.65, 1.0) + Vector3.UP * rng.randf_range(0.75, 1.25)).normalized()
+
+        var horizontal_weight: float = lerpf(0.48, 1.30, distance_ratio)
+        var vertical_weight: float = lerpf(1.55, 0.62, distance_ratio)
+        vertical_weight *= rng.randf_range(0.88, 1.18)
+        horizontal_weight *= rng.randf_range(0.86, 1.16)
+        var direction: Vector3 = (horizontal * horizontal_weight + Vector3.UP * vertical_weight).normalized()
+        var speed: float = blast_strength * lerpf(0.88, 0.48, distance_ratio) * rng.randf_range(0.82, 1.16)
+
         var chunk := SandChunk.new()
         chunk.sand = self
         chunk.deposit_amount = deposit_each
         chunk.grain_color = PALETTE[colors[i]]
         get_tree().current_scene.add_child(chunk)
         chunk.global_position = start
-        chunk.apply_central_impulse(direction * rng.randf_range(blast_strength * 0.032, blast_strength * 0.060))
+        chunk.apply_central_impulse(direction * speed * chunk.mass)
 
 func deposit(world_position: Vector3, amount: float, grain_color: Color) -> void:
     if abs(world_position.x) > HALF_EXTENT or abs(world_position.z) > HALF_EXTENT:
@@ -235,7 +258,7 @@ func deposit(world_position: Vector3, amount: float, grain_color: Color) -> void
         if each > 0.004 or rng.randf() < 0.45:
             colors[i] = color_index
         _update_cell_visual(i)
-    _refresh_collision()
+    _queue_collision_refresh()
 
 func _nearest_palette_index(color: Color) -> int:
     var best: int = 0
@@ -259,6 +282,16 @@ func _update_cell_visual(i: int) -> void:
         var transform := Transform3D(Basis.IDENTITY, Vector3(_world_x(x), y, _world_z(z)))
         multimesh.set_instance_transform(instance_index, transform)
         multimesh.set_instance_color(instance_index, PALETTE[colors[i]])
+
+func _queue_collision_refresh() -> void:
+    if collision_refresh_queued:
+        return
+    collision_refresh_queued = true
+    call_deferred("_flush_collision_refresh")
+
+func _flush_collision_refresh() -> void:
+    collision_refresh_queued = false
+    _refresh_collision()
 
 func _refresh_collision() -> void:
     if height_shape != null:

@@ -14,6 +14,7 @@ var aim_camera: Camera3D
 var visual_root: Node3D
 var animation_player: AnimationPlayer
 var skeleton: Skeleton3D
+var idle_animation := ""
 var walk_animation := ""
 var throw_animation := ""
 var left_foot_bone := -1
@@ -225,10 +226,16 @@ func _discover_animations() -> void:
     if animation_player == null:
         return
     var animations := animation_player.get_animation_list()
+    idle_animation = _find_animation_name(animations, ["idle", "standing", "stand"])
     walk_animation = _find_animation_name(animations, ["walk", "walking", "run"])
     throw_animation = _find_animation_name(animations, ["throw", "spell", "cast", "attack", "shoot"])
-    if walk_animation != "":
-        animation_player.play(walk_animation)
+    animation_player.playback_default_blend_time = 0.12
+
+    if idle_animation != "":
+        animation_player.play(idle_animation, 0.0, 1.0)
+    elif walk_animation != "":
+        animation_player.play(walk_animation, 0.0, 1.0)
+        animation_player.seek(0.0, true)
         animation_player.pause()
 
 func _find_animation_name(animations: PackedStringArray, keywords: Array[String]) -> String:
@@ -255,12 +262,18 @@ func _play_walk() -> void:
     if animation_player == null or walk_animation == "" or throw_locked:
         return
     if animation_player.current_animation != walk_animation or not animation_player.is_playing():
-        animation_player.play(walk_animation, 0.12, 1.0)
+        animation_player.play(walk_animation, 0.14, 1.0)
 
 func _play_idle_if_possible() -> void:
     if animation_player == null or throw_locked:
         return
-    if animation_player.is_playing() and animation_player.current_animation == walk_animation:
+    if idle_animation != "":
+        if animation_player.current_animation != idle_animation or not animation_player.is_playing():
+            animation_player.play(idle_animation, 0.16, 1.0)
+        return
+
+    if walk_animation != "" and animation_player.current_animation == walk_animation:
+        animation_player.seek(0.0, true)
         animation_player.pause()
 
 func _play_throw() -> void:
