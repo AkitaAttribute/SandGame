@@ -10,7 +10,7 @@ var status_refresh := 0.0
 func _ready() -> void:
     _build_lighting()
 
-    sand = SandFieldV3.new()
+    sand = SandFieldV4.new()
     sand.name = "SandField"
     add_child(sand)
 
@@ -58,8 +58,6 @@ func _build_physical_floor(world_size: float) -> void:
     floor_body.collision_mask = 1
     add_child(floor_body)
 
-    # This is the actual bottom of the simulation volume at y=0. There is no
-    # second player support surface hidden at the top of the sand.
     var collision := CollisionShape3D.new()
     var shape := BoxShape3D.new()
     shape.size = Vector3(world_size, 0.02, world_size)
