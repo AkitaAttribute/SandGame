@@ -9,14 +9,13 @@ var status_refresh := 0.0
 func _ready() -> void:
     _build_lighting()
 
-    sand = SandField.new()
+    sand = SandFieldV2.new()
     sand.name = "SandField"
     add_child(sand)
 
     _build_physical_floor(sand.world_size())
-    _build_player_support(sand.surface_height_at(Vector3.ZERO), sand.world_size())
 
-    player = PlayerController.new()
+    player = SandPlayerController.new()
     player.name = "Player"
     add_child(player)
     player.sand = sand
@@ -49,31 +48,19 @@ func _process(delta: float) -> void:
 
 func _build_physical_floor(world_size: float) -> void:
     var floor_body := StaticBody3D.new()
-    floor_body.name = "BombFloor"
+    floor_body.name = "WorldFloor"
     floor_body.collision_layer = 1
     floor_body.collision_mask = 1
     add_child(floor_body)
 
+    # This is the actual bottom of the simulation volume at y=0. There is no
+    # second player support surface hidden at the top of the sand.
     var collision := CollisionShape3D.new()
     var shape := BoxShape3D.new()
     shape.size = Vector3(world_size, 0.02, world_size)
     collision.shape = shape
     collision.position.y = -0.01
     floor_body.add_child(collision)
-
-func _build_player_support(surface_y: float, world_size: float) -> void:
-    var support_body := StaticBody3D.new()
-    support_body.name = "TemporaryPlayerSupport"
-    support_body.collision_layer = 2
-    support_body.collision_mask = 2
-    add_child(support_body)
-
-    var collision := CollisionShape3D.new()
-    var shape := BoxShape3D.new()
-    shape.size = Vector3(world_size, 0.02, world_size)
-    collision.shape = shape
-    collision.position.y = surface_y - 0.01
-    support_body.add_child(collision)
 
 func _build_lighting() -> void:
     var environment_node := WorldEnvironment.new()

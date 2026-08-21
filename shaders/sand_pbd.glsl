@@ -105,17 +105,22 @@ void apply_external_commands(uint id, inout vec3 p, inout vec3 v) {
             }
 
             float distance = sqrt(max(distance_squared, 1e-8));
-            vec3 normal = distance > 1e-4 ? offset / distance : vec3(0.0, -1.0, 0.0);
+            vec3 normal = distance > 1e-4
+                ? offset / distance
+                : vec3(0.0, -1.0, 0.0);
             float penetration = minimum_distance - distance;
 
-            p += normal * penetration * 0.72;
+            // External bodies no longer behave like infinitely strong cutters.
+            // The packed bed only yields part of the overlap on the grain side;
+            // the body receives the complementary reaction on the CPU side.
+            p += normal * penetration * 0.28;
 
             float closing_speed = dot(b.xyz - v, normal);
             if (closing_speed > 0.0) {
-                v += normal * closing_speed * 0.62;
+                v += normal * closing_speed * 0.28;
             }
 
-            v += normal * (penetration / max(pc.dt, 1e-4)) * 0.20;
+            v += normal * (penetration / max(pc.dt, 1e-4)) * 0.07;
         }
     }
 }
@@ -181,7 +186,9 @@ void phase_solve(uint id) {
                 uint count = min(cell_counts[cell], pc.max_cell_particles);
 
                 for (uint slot = 0u; slot < count; ++slot) {
-                    uint other_id = cell_particles[cell * pc.max_cell_particles + slot];
+                    uint other_id = cell_particles[
+                        cell * pc.max_cell_particles + slot
+                    ];
                     if (other_id == id || other_id >= pc.particle_count) {
                         continue;
                     }
@@ -200,20 +207,27 @@ void phase_solve(uint id) {
                         : vec3(1.0, 0.0, 0.0);
 
                     float penetration = diameter - distance;
-                    correction -= normal * penetration * 0.5;
+                    float normal_correction = penetration * 0.5;
+                    correction -= normal * normal_correction;
 
                     vec3 q_previous = previous_positions[other_id].xyz;
                     vec3 relative_displacement =
                         (p - p_previous) - (q - q_previous);
-                    vec3 tangent =
-                        relative_displacement
+                    vec3 tangent = relative_displacement
                         - normal * dot(relative_displacement, normal);
                     float tangent_length = length(tangent);
 
                     if (tangent_length > 1e-5) {
-                        float max_friction = pc.friction * penetration * 0.5;
-                        float friction_amount = min(tangent_length * 0.5, max_friction);
-                        correction -= tangent / tangent_length * friction_amount;
+                        // Static friction first: small tangential motion is
+                        // completely cancelled while the contact force can hold it.
+                        float static_limit = pc.friction * 1.35 * penetration;
+                        if (tangent_length <= static_limit) {
+                            correction -= tangent * 0.5;
+                        } else {
+                            float dynamic_limit = pc.friction * normal_correction;
+                            float amount = min(tangent_length * 0.5, dynamic_limit);
+                            correction -= tangent / tangent_length * amount;
+                        }
                     }
                 }
             }
@@ -229,9 +243,13 @@ void phase_solve(uint id) {
         vec2 lateral = p.xz - p_previous.xz;
         float lateral_length = length(lateral);
         if (lateral_length > 1e-5) {
-            float max_friction = pc.friction * penetration;
-            float amount = min(lateral_length, max_friction);
-            correction.xz -= lateral / lateral_length * amount;
+            float static_limit = pc.friction * 1.35 * penetration;
+            if (lateral_length <= static_limit) {
+                correction.xz -= lateral;
+            } else {
+                float amount = min(lateral_length, pc.friction * penetration);
+                correction.xz -= lateral / lateral_length * amount;
+            }
         }
     }
 
