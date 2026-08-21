@@ -17,21 +17,23 @@ const PLAYER_SURFACE_Y := GRAIN_RADIUS * 2.0 + (LAYERS - 1) * PACKING_SPACING
 
 const CELL_SIZE := GRAIN_DIAMETER * 1.08
 const GRID_Y_CELLS := 32
+const GRID_X_CELLS := int(ceil((BOUNDARY_HALF_EXTENT * 2.0) / CELL_SIZE)) + 2
+const GRID_Z_CELLS := GRID_X_CELLS
+const GRID_CELL_COUNT := GRID_X_CELLS * GRID_Y_CELLS * GRID_Z_CELLS
+const MAX_CELL_PARTICLES := 24
 
-const AIR_DRAG := 0.045
-const FLOOR_FRICTION_RATE := 5.2
-const WALL_RESTITUTION := 0.10
-const GRAIN_RESTITUTION := 0.035
-const GRAIN_FRICTION := 0.48
-const POSITION_CORRECTION := 0.90
-
-const SIM_HZ := 30.0
+const SIM_HZ := 60.0
 const SIM_DT := 1.0 / SIM_HZ
 const MAX_SIM_STEPS_PER_FRAME := 2
-const HIGH_SPEED_SUBSTEP_THRESHOLD := 4.5
+const PBD_ITERATIONS := 5
+const WORKGROUP_SIZE := 128
+const MAX_COMMANDS := 16
 
-const SLEEP_SPEED := 0.11
-const SLEEP_DELAY := 0.42
+const CONTACT_FRICTION := 0.48
+const RESTITUTION := 0.04
+const VELOCITY_DAMPING := 0.997
+const CONTACT_BIAS_PER_SECOND := 25.0
+const MAX_BODY_REACTION_IMPULSE := 0.85
 
 const PALETTE := [
     Color(0.86, 0.18, 0.15),
@@ -40,132 +42,98 @@ const PALETTE := [
     Color(0.18, 0.72, 0.31),
 ]
 
-var positions := PackedVector3Array()
-var velocities := PackedVector3Array()
-var rest_positions := PackedVector3Array()
+var rd: RenderingDevice
+var shader_rid := RID()
+var pipeline_rid := RID()
+var uniform_set_rid := RID()
+
+var position_buffer := RID()
+var previous_position_buffer := RID()
+var velocity_buffer := RID()
+var correction_buffer := RID()
+var cell_count_buffer := RID()
+var cell_particle_buffer := RID()
+var command_buffer := RID()
+
+var cpu_positions := PackedVector3Array()
+var cpu_previous_positions := PackedVector3Array()
 var colors := PackedInt32Array()
 
-var active_flags := PackedByteArray()
-var active_slots := PackedInt32Array()
-var sleep_times := PackedFloat32Array()
-var contact_flags := PackedByteArray()
-var active_indices: Array[int] = []
-
-var dirty_flags := PackedByteArray()
-var dirty_indices: Array[int] = []
-
-# Persistent broadphase. Every grain lives in exactly one fixed grid cell.
-# Only grains that cross a cell boundary update these links.
-var cell_heads := PackedInt32Array()
-var next_in_cell := PackedInt32Array()
-var prev_in_cell := PackedInt32Array()
-var particle_cell := PackedInt32Array()
-var grid_x := 0
-var grid_z := 0
-var grid_cell_count := 0
+var pending_commands: Array = []
+var simulation_accumulator := 0.0
+var gpu_ready := false
 
 var multimesh_instance: MultiMeshInstance3D
 var multimesh: MultiMesh
-var simulation_accumulator := 0.0
+var render_buffer := PackedFloat32Array()
 
 func _ready() -> void:
     add_to_group("sand")
-    _initialize_grid()
     _initialize_particles()
     _build_multimesh()
-    _update_all_visuals()
 
-func _physics_process(delta: float) -> void:
-    if active_indices.is_empty():
-        simulation_accumulator = 0.0
-        _update_dirty_visuals()
+    if not OS.has_feature("headless"):
+        _initialize_gpu_solver()
+
+    _update_render_buffer()
+
+func _exit_tree() -> void:
+    if rd == null:
         return
 
-    simulation_accumulator += minf(delta, 0.10)
+    for rid in [
+        uniform_set_rid,
+        pipeline_rid,
+        shader_rid,
+        position_buffer,
+        previous_position_buffer,
+        velocity_buffer,
+        correction_buffer,
+        cell_count_buffer,
+        cell_particle_buffer,
+        command_buffer,
+    ]:
+        if rid.is_valid():
+            rd.free_rid(rid)
+
+func _physics_process(delta: float) -> void:
+    if not gpu_ready:
+        return
+
+    simulation_accumulator += minf(delta, 0.05)
     var steps := 0
 
     while simulation_accumulator >= SIM_DT and steps < MAX_SIM_STEPS_PER_FRAME:
-        _simulate_step(SIM_DT)
+        _run_gpu_step()
         simulation_accumulator -= SIM_DT
         steps += 1
 
-    # Do not allow a long hitch to create a physics catch-up spiral.
     if steps >= MAX_SIM_STEPS_PER_FRAME and simulation_accumulator > SIM_DT:
         simulation_accumulator = SIM_DT
 
-    _update_dirty_visuals()
-
-func _simulate_step(dt: float) -> void:
-    if active_indices.is_empty():
-        return
-
-    var substeps := 1
-    if _max_active_speed_squared() > HIGH_SPEED_SUBSTEP_THRESHOLD * HIGH_SPEED_SUBSTEP_THRESHOLD:
-        substeps = 2
-
-    var step_dt := dt / float(substeps)
-    for _substep in range(substeps):
-        if active_indices.is_empty():
-            break
-        _reset_active_contact_flags()
-        _integrate_active(step_dt)
-        _constrain_active(step_dt, true)
-        _solve_active_contacts()
-        _constrain_active(step_dt, false)
-        _update_sleep(step_dt)
-
-func _initialize_grid() -> void:
-    grid_x = int(ceil((BOUNDARY_HALF_EXTENT * 2.0) / CELL_SIZE)) + 2
-    grid_z = grid_x
-    grid_cell_count = grid_x * GRID_Y_CELLS * grid_z
-
-    cell_heads.resize(grid_cell_count)
-    cell_heads.fill(-1)
-
-    next_in_cell.resize(PARTICLE_COUNT)
-    next_in_cell.fill(-1)
-
-    prev_in_cell.resize(PARTICLE_COUNT)
-    prev_in_cell.fill(-1)
-
-    particle_cell.resize(PARTICLE_COUNT)
-    particle_cell.fill(-1)
-
 func _initialize_particles() -> void:
-    positions.resize(PARTICLE_COUNT)
-    velocities.resize(PARTICLE_COUNT)
-    rest_positions.resize(PARTICLE_COUNT)
+    cpu_positions.resize(PARTICLE_COUNT)
+    cpu_previous_positions.resize(PARTICLE_COUNT)
     colors.resize(PARTICLE_COUNT)
-
-    active_flags.resize(PARTICLE_COUNT)
-    active_slots.resize(PARTICLE_COUNT)
-    active_slots.fill(-1)
-    sleep_times.resize(PARTICLE_COUNT)
-    contact_flags.resize(PARTICLE_COUNT)
-
-    dirty_flags.resize(PARTICLE_COUNT)
 
     var index := 0
     for layer in range(LAYERS):
         for z in range(PARTICLES_Z):
             for x in range(PARTICLES_X):
-                var px := (float(x) - float(PARTICLES_X - 1) * 0.5) * PACKING_SPACING
-                var pz := (float(z) - float(PARTICLES_Z - 1) * 0.5) * PACKING_SPACING
+                var px := (
+                    (float(x) - float(PARTICLES_X - 1) * 0.5)
+                    * PACKING_SPACING
+                )
+                var pz := (
+                    (float(z) - float(PARTICLES_Z - 1) * 0.5)
+                    * PACKING_SPACING
+                )
                 var py := GRAIN_RADIUS + float(layer) * PACKING_SPACING
-                var p := Vector3(px, py, pz)
+                var position := Vector3(px, py, pz)
 
-                positions[index] = p
-                rest_positions[index] = p
-                velocities[index] = Vector3.ZERO
-                colors[index] = _initial_color_index(p)
-
-                active_flags[index] = 0
-                sleep_times[index] = 0.0
-                contact_flags[index] = 0
-                dirty_flags[index] = 1
-                dirty_indices.append(index)
-
-                _insert_particle_into_cell(index, _cell_for_position(p))
+                cpu_positions[index] = position
+                cpu_previous_positions[index] = position
+                colors[index] = _initial_color_index(position)
                 index += 1
 
 func _initial_color_index(position: Vector3) -> int:
@@ -200,421 +168,334 @@ func _build_multimesh() -> void:
     multimesh.instance_count = PARTICLE_COUNT
     multimesh_instance.multimesh = multimesh
 
+    render_buffer.resize(PARTICLE_COUNT * 16)
+
     for i in range(PARTICLE_COUNT):
-        multimesh.set_instance_color(i, PALETTE[colors[i]])
+        var base := i * 16
+        render_buffer[base + 0] = 1.0
+        render_buffer[base + 1] = 0.0
+        render_buffer[base + 2] = 0.0
+        render_buffer[base + 4] = 0.0
+        render_buffer[base + 5] = 1.0
+        render_buffer[base + 6] = 0.0
+        render_buffer[base + 8] = 0.0
+        render_buffer[base + 9] = 0.0
+        render_buffer[base + 10] = 1.0
 
-func _wake(index: int) -> void:
-    if active_flags[index] != 0:
-        sleep_times[index] = 0.0
+        var color: Color = PALETTE[colors[i]]
+        render_buffer[base + 12] = color.r
+        render_buffer[base + 13] = color.g
+        render_buffer[base + 14] = color.b
+        render_buffer[base + 15] = 1.0
+
+func _initialize_gpu_solver() -> void:
+    rd = RenderingServer.create_local_rendering_device()
+    if rd == null:
+        push_warning("RenderingDevice unavailable; sand GPU solver disabled.")
         return
 
-    active_flags[index] = 1
-    active_slots[index] = active_indices.size()
-    active_indices.append(index)
-    sleep_times[index] = 0.0
-
-func _sleep(index: int) -> void:
-    if active_flags[index] == 0:
+    var shader_file := load("res://shaders/sand_pbd.glsl") as RDShaderFile
+    if shader_file == null:
+        push_error("Unable to load sand compute shader.")
         return
 
-    var slot := active_slots[index]
-    var last_slot := active_indices.size() - 1
-    var last_index := active_indices[last_slot]
-
-    if slot != last_slot:
-        active_indices[slot] = last_index
-        active_slots[last_index] = slot
-
-    active_indices.pop_back()
-    active_flags[index] = 0
-    active_slots[index] = -1
-    velocities[index] = Vector3.ZERO
-    sleep_times[index] = 0.0
-    _mark_dirty(index)
-
-func _mark_dirty(index: int) -> void:
-    if dirty_flags[index] != 0:
+    var spirv: RDShaderSPIRV = shader_file.get_spirv()
+    shader_rid = rd.shader_create_from_spirv(spirv)
+    if not shader_rid.is_valid():
+        push_error("Unable to create sand compute shader.")
         return
-    dirty_flags[index] = 1
-    dirty_indices.append(index)
 
-func _reset_active_contact_flags() -> void:
-    for index in active_indices:
-        contact_flags[index] = 0
+    pipeline_rid = rd.compute_pipeline_create(shader_rid)
+    if not pipeline_rid.is_valid():
+        push_error("Unable to create sand compute pipeline.")
+        return
 
-func _max_active_speed_squared() -> float:
-    var maximum := 0.0
-    for index in active_indices:
-        maximum = maxf(maximum, velocities[index].length_squared())
-    return maximum
+    var position_data := PackedFloat32Array()
+    position_data.resize(PARTICLE_COUNT * 4)
 
-func _integrate_active(dt: float) -> void:
-    var drag := 1.0 / (1.0 + AIR_DRAG * dt)
+    for i in range(PARTICLE_COUNT):
+        var p := cpu_positions[i]
+        var base := i * 4
+        position_data[base + 0] = p.x
+        position_data[base + 1] = p.y
+        position_data[base + 2] = p.z
+        position_data[base + 3] = 1.0
 
-    for index in active_indices:
-        var velocity := velocities[index]
-        var position := positions[index]
+    var zero_vectors := PackedFloat32Array()
+    zero_vectors.resize(PARTICLE_COUNT * 4)
 
-        velocity.y -= GRAVITY * dt
-        velocity *= drag
-        position += velocity * dt
+    var position_bytes := position_data.to_byte_array()
+    var zero_vector_bytes := zero_vectors.to_byte_array()
 
-        positions[index] = position
-        velocities[index] = velocity
-        _move_particle_cell_if_needed(index)
-        _mark_dirty(index)
-
-func _constrain_active(dt: float, apply_floor_friction: bool) -> void:
-    var floor_drag := maxf(0.0, 1.0 - FLOOR_FRICTION_RATE * dt)
-    var limit := BOUNDARY_HALF_EXTENT - GRAIN_RADIUS
-
-    for index in active_indices:
-        var position := positions[index]
-        var velocity := velocities[index]
-
-        if _vector_is_invalid(position) or _vector_is_invalid(velocity):
-            _restore_particle(index)
-            continue
-
-        if position.y < GRAIN_RADIUS:
-            position.y = GRAIN_RADIUS
-            contact_flags[index] = 1
-            if velocity.y < 0.0:
-                velocity.y = -velocity.y * GRAIN_RESTITUTION
-
-            if apply_floor_friction:
-                velocity.x *= floor_drag
-                velocity.z *= floor_drag
-                if absf(velocity.y) < 0.020:
-                    velocity.y = 0.0
-                if Vector2(velocity.x, velocity.z).length_squared() < 0.00008:
-                    velocity.x = 0.0
-                    velocity.z = 0.0
-
-        if position.x < -limit:
-            position.x = -limit
-            contact_flags[index] = 1
-            if velocity.x < 0.0:
-                velocity.x = -velocity.x * WALL_RESTITUTION
-        elif position.x > limit:
-            position.x = limit
-            contact_flags[index] = 1
-            if velocity.x > 0.0:
-                velocity.x = -velocity.x * WALL_RESTITUTION
-
-        if position.z < -limit:
-            position.z = -limit
-            contact_flags[index] = 1
-            if velocity.z < 0.0:
-                velocity.z = -velocity.z * WALL_RESTITUTION
-        elif position.z > limit:
-            position.z = limit
-            contact_flags[index] = 1
-            if velocity.z > 0.0:
-                velocity.z = -velocity.z * WALL_RESTITUTION
-
-        positions[index] = position
-        velocities[index] = velocity
-        _move_particle_cell_if_needed(index)
-        _mark_dirty(index)
-
-func _restore_particle(index: int) -> void:
-    _remove_particle_from_cell(index)
-    positions[index] = rest_positions[index]
-    velocities[index] = Vector3.ZERO
-    _insert_particle_into_cell(index, _cell_for_position(positions[index]))
-    contact_flags[index] = 1
-    sleep_times[index] = SLEEP_DELAY
-    _mark_dirty(index)
-
-func _vector_is_invalid(value: Vector3) -> bool:
-    return (
-        is_nan(value.x) or is_nan(value.y) or is_nan(value.z)
-        or is_inf(value.x) or is_inf(value.y) or is_inf(value.z)
+    position_buffer = rd.storage_buffer_create(
+        position_bytes.size(),
+        position_bytes
+    )
+    previous_position_buffer = rd.storage_buffer_create(
+        position_bytes.size(),
+        position_bytes
+    )
+    velocity_buffer = rd.storage_buffer_create(
+        zero_vector_bytes.size(),
+        zero_vector_bytes
+    )
+    correction_buffer = rd.storage_buffer_create(
+        zero_vector_bytes.size(),
+        zero_vector_bytes
     )
 
-func _solve_active_contacts() -> void:
-    # Newly woken grains are appended to active_indices but wait until the next
-    # substep. This prevents a single contact chain from recursively exploding
-    # the amount of work in the current solver pass.
-    var active_at_start := active_indices.size()
+    var zero_counts := PackedInt32Array()
+    zero_counts.resize(GRID_CELL_COUNT)
+    var zero_count_bytes := zero_counts.to_byte_array()
+    cell_count_buffer = rd.storage_buffer_create(
+        zero_count_bytes.size(),
+        zero_count_bytes
+    )
 
-    for slot in range(active_at_start):
-        var i := active_indices[slot]
-        var cell := particle_cell[i]
-        var cx := cell % grid_x
-        var remainder := int(cell / grid_x)
-        var cz := remainder % grid_z
-        var cy := int(remainder / grid_z)
+    var cell_slots := PackedInt32Array()
+    cell_slots.resize(GRID_CELL_COUNT * MAX_CELL_PARTICLES)
+    var cell_slot_bytes := cell_slots.to_byte_array()
+    cell_particle_buffer = rd.storage_buffer_create(
+        cell_slot_bytes.size(),
+        cell_slot_bytes
+    )
 
-        for oy in range(-1, 2):
-            var ny := cy + oy
-            if ny < 0 or ny >= GRID_Y_CELLS:
-                continue
+    var command_data := PackedFloat32Array()
+    command_data.resize(MAX_COMMANDS * 8)
+    var command_bytes := command_data.to_byte_array()
+    command_buffer = rd.storage_buffer_create(
+        command_bytes.size(),
+        command_bytes
+    )
 
-            for oz in range(-1, 2):
-                var nz := cz + oz
-                if nz < 0 or nz >= grid_z:
-                    continue
+    var uniforms: Array[RDUniform] = []
+    uniforms.append(_storage_uniform(0, position_buffer))
+    uniforms.append(_storage_uniform(1, previous_position_buffer))
+    uniforms.append(_storage_uniform(2, velocity_buffer))
+    uniforms.append(_storage_uniform(3, correction_buffer))
+    uniforms.append(_storage_uniform(4, cell_count_buffer))
+    uniforms.append(_storage_uniform(5, cell_particle_buffer))
+    uniforms.append(_storage_uniform(6, command_buffer))
 
-                for ox in range(-1, 2):
-                    var nx := cx + ox
-                    if nx < 0 or nx >= grid_x:
-                        continue
-
-                    var neighbor_cell := _flat_cell(nx, ny, nz)
-                    var j := cell_heads[neighbor_cell]
-
-                    while j >= 0:
-                        var next_j := next_in_cell[j]
-
-                        if j != i:
-                            # Active/active pairs are solved once. Sleeping
-                            # neighbors are still considered because they may
-                            # need to wake when struck.
-                            if active_flags[j] == 0 or j > i:
-                                _resolve_grain_pair(i, j)
-
-                        j = next_j
-
-func _resolve_grain_pair(i: int, j: int) -> void:
-    var a := positions[i]
-    var b := positions[j]
-    var delta := b - a
-    var distance_squared := delta.length_squared()
-    var minimum_distance_squared := GRAIN_DIAMETER * GRAIN_DIAMETER
-
-    if distance_squared >= minimum_distance_squared:
+    uniform_set_rid = rd.uniform_set_create(uniforms, shader_rid, 0)
+    if not uniform_set_rid.is_valid():
+        push_error("Unable to create sand compute uniform set.")
         return
 
-    var normal: Vector3
-    var distance: float
+    gpu_ready = true
 
-    if distance_squared < 0.00000001:
-        normal = Vector3.RIGHT if ((i + j) % 2) == 0 else Vector3.FORWARD
-        distance = 0.0001
-    else:
-        distance = sqrt(distance_squared)
-        normal = delta / distance
+func _storage_uniform(binding: int, rid: RID) -> RDUniform:
+    var uniform := RDUniform.new()
+    uniform.uniform_type = RenderingDevice.UNIFORM_TYPE_STORAGE_BUFFER
+    uniform.binding = binding
+    uniform.add_id(rid)
+    return uniform
 
-    var penetration := GRAIN_DIAMETER - distance
-    var velocity_a := velocities[i]
-    var velocity_b := velocities[j]
-    var relative_velocity := velocity_b - velocity_a
-    var normal_speed := relative_velocity.dot(normal)
+func _run_gpu_step() -> void:
+    _upload_pending_commands()
 
-    # A sleeping grain is effectively part of the packed bed until a moving
-    # neighbor actually reaches it. Once contact occurs it joins the active
-    # island, but it will not be integrated until the next substep.
-    if active_flags[j] == 0:
-        if penetration > 0.0015 or normal_speed < -0.035:
-            _wake(j)
-        else:
-            return
+    var particle_groups := int(ceil(float(PARTICLE_COUNT) / float(WORKGROUP_SIZE)))
+    var grid_groups := int(ceil(float(GRID_CELL_COUNT) / float(WORKGROUP_SIZE)))
+    var command_count := mini(pending_commands.size(), MAX_COMMANDS)
 
-    contact_flags[i] = 1
-    contact_flags[j] = 1
+    var compute_list := rd.compute_list_begin()
+    rd.compute_list_bind_compute_pipeline(compute_list, pipeline_rid)
+    rd.compute_list_bind_uniform_set(compute_list, uniform_set_rid, 0)
 
-    var correction := normal * penetration * 0.5 * POSITION_CORRECTION
-    a -= correction
-    b += correction
+    _dispatch_phase(compute_list, 0, particle_groups, command_count, 0)
+    rd.compute_list_add_barrier(compute_list)
 
-    if normal_speed < 0.0:
-        var normal_impulse_speed := -(1.0 + GRAIN_RESTITUTION) * normal_speed * 0.5
-        velocity_a -= normal * normal_impulse_speed
-        velocity_b += normal * normal_impulse_speed
+    for iteration in range(PBD_ITERATIONS):
+        _dispatch_phase(compute_list, 1, grid_groups, command_count, iteration)
+        rd.compute_list_add_barrier(compute_list)
 
-        var tangent := relative_velocity - normal * normal_speed
-        var tangent_length := tangent.length()
+        _dispatch_phase(compute_list, 2, particle_groups, command_count, iteration)
+        rd.compute_list_add_barrier(compute_list)
 
-        if tangent_length > 0.0001:
-            var tangent_direction := tangent / tangent_length
-            var friction_speed := minf(
-                tangent_length * 0.5,
-                normal_impulse_speed * GRAIN_FRICTION
-            )
-            velocity_a += tangent_direction * friction_speed
-            velocity_b -= tangent_direction * friction_speed
+        _dispatch_phase(compute_list, 3, particle_groups, command_count, iteration)
+        rd.compute_list_add_barrier(compute_list)
 
-    positions[i] = a
-    positions[j] = b
-    velocities[i] = velocity_a
-    velocities[j] = velocity_b
+        _dispatch_phase(compute_list, 4, particle_groups, command_count, iteration)
+        rd.compute_list_add_barrier(compute_list)
 
-    _move_particle_cell_if_needed(i)
-    _move_particle_cell_if_needed(j)
-    _mark_dirty(i)
-    _mark_dirty(j)
+    _dispatch_phase(compute_list, 5, particle_groups, command_count, 0)
 
-func _update_sleep(dt: float) -> void:
-    var sleep_speed_squared := SLEEP_SPEED * SLEEP_SPEED
-    var slot := 0
+    rd.compute_list_end()
+    rd.submit()
+    rd.sync()
 
-    while slot < active_indices.size():
-        var index := active_indices[slot]
+    pending_commands.clear()
+    _read_back_positions()
+    _update_render_buffer()
 
-        if contact_flags[index] != 0 and velocities[index].length_squared() <= sleep_speed_squared:
-            sleep_times[index] += dt
-            if sleep_times[index] >= SLEEP_DELAY:
-                _sleep(index)
-                continue
-        else:
-            sleep_times[index] = 0.0
+func _dispatch_phase(
+    compute_list: int,
+    phase: int,
+    groups: int,
+    command_count: int,
+    iteration: int
+) -> void:
+    var push := _make_push_constants(phase, command_count, iteration)
+    rd.compute_list_set_push_constant(compute_list, push, push.size())
+    rd.compute_list_dispatch(compute_list, groups, 1, 1)
 
-        slot += 1
+func _make_push_constants(
+    phase: int,
+    command_count: int,
+    iteration: int
+) -> PackedByteArray:
+    var push := PackedByteArray()
+    push.resize(64)
 
-func apply_radial_impulse(center: Vector3, radius: float = 2.7, impulse_speed: float = 8.5) -> void:
-    var radius_squared := radius * radius
-    var min_coords := _cell_coords_for_position(center - Vector3.ONE * radius)
-    var max_coords := _cell_coords_for_position(center + Vector3.ONE * radius)
+    push.encode_u32(0, phase)
+    push.encode_u32(4, PARTICLE_COUNT)
+    push.encode_u32(8, GRID_X_CELLS)
+    push.encode_u32(12, GRID_Y_CELLS)
+    push.encode_u32(16, GRID_Z_CELLS)
+    push.encode_u32(20, MAX_CELL_PARTICLES)
+    push.encode_u32(24, command_count)
+    push.encode_u32(28, iteration)
 
-    for cy in range(min_coords.y, max_coords.y + 1):
-        for cz in range(min_coords.z, max_coords.z + 1):
-            for cx in range(min_coords.x, max_coords.x + 1):
-                var cell := _flat_cell(cx, cy, cz)
-                var index := cell_heads[cell]
+    push.encode_float(32, SIM_DT)
+    push.encode_float(36, GRAIN_RADIUS)
+    push.encode_float(40, BOUNDARY_HALF_EXTENT)
+    push.encode_float(44, CELL_SIZE)
+    push.encode_float(48, GRAVITY)
+    push.encode_float(52, CONTACT_FRICTION)
+    push.encode_float(56, RESTITUTION)
+    push.encode_float(60, VELOCITY_DAMPING)
 
-                while index >= 0:
-                    var next_index := next_in_cell[index]
-                    var offset := positions[index] - center
-                    var distance_squared := offset.length_squared()
+    return push
 
-                    if distance_squared < radius_squared:
-                        var distance := sqrt(maxf(distance_squared, 0.000001))
-                        var direction := offset / distance
-                        var falloff := pow(1.0 - distance / radius, 1.25)
-                        var delta_velocity := impulse_speed * (0.12 + 0.88 * falloff)
+func _upload_pending_commands() -> void:
+    var data := PackedFloat32Array()
+    data.resize(MAX_COMMANDS * 8)
 
-                        _wake(index)
-                        velocities[index] += direction * delta_velocity
-                        _mark_dirty(index)
+    var count := mini(pending_commands.size(), MAX_COMMANDS)
+    for i in range(count):
+        var command: Dictionary = pending_commands[i]
+        var center: Vector3 = command["center"]
+        var vector: Vector3 = command["vector"]
+        var base := i * 8
 
-                    index = next_index
+        data[base + 0] = center.x
+        data[base + 1] = center.y
+        data[base + 2] = center.z
+        data[base + 3] = float(command["radius"])
+        data[base + 4] = vector.x
+        data[base + 5] = vector.y
+        data[base + 6] = vector.z
+        data[base + 7] = float(command["mode"])
+
+    var bytes := data.to_byte_array()
+    rd.buffer_update(command_buffer, 0, bytes.size(), bytes)
+
+func _read_back_positions() -> void:
+    var bytes := rd.buffer_get_data(position_buffer)
+    var values := bytes.to_float32_array()
+    if values.size() < PARTICLE_COUNT * 4:
+        return
+
+    cpu_previous_positions = cpu_positions.duplicate()
+
+    for i in range(PARTICLE_COUNT):
+        var base := i * 4
+        cpu_positions[i] = Vector3(
+            values[base + 0],
+            values[base + 1],
+            values[base + 2]
+        )
+
+func _update_render_buffer() -> void:
+    if multimesh == null:
+        return
+
+    for i in range(PARTICLE_COUNT):
+        var p := cpu_positions[i]
+        var base := i * 16
+        render_buffer[base + 3] = p.x
+        render_buffer[base + 7] = p.y
+        render_buffer[base + 11] = p.z
+
+    RenderingServer.multimesh_set_buffer(multimesh.get_rid(), render_buffer)
+
+func apply_radial_impulse(
+    center: Vector3,
+    radius: float = 2.7,
+    impulse_speed: float = 8.5
+) -> void:
+    _queue_command(center, radius, Vector3(impulse_speed, 0.0, 0.0), 1.0)
 
 func interact_sphere(
     center: Vector3,
     radius: float,
     body_velocity: Vector3,
-    _body_mass: float,
+    body_mass: float,
     _dt: float
 ) -> Vector3:
+    _queue_command(center, radius, body_velocity, 2.0)
+
+    if cpu_positions.is_empty():
+        return Vector3.ZERO
+
     var reaction_impulse := Vector3.ZERO
     var minimum_distance := radius + GRAIN_RADIUS
     var minimum_distance_squared := minimum_distance * minimum_distance
+    var reduced_mass := (
+        body_mass * GRAIN_MASS / maxf(body_mass + GRAIN_MASS, 0.0001)
+    )
 
-    var min_coords := _cell_coords_for_position(center - Vector3.ONE * minimum_distance)
-    var max_coords := _cell_coords_for_position(center + Vector3.ONE * minimum_distance)
+    for i in range(PARTICLE_COUNT):
+        var offset := cpu_positions[i] - center
+        var distance_squared := offset.length_squared()
+        if distance_squared >= minimum_distance_squared:
+            continue
 
-    for cy in range(min_coords.y, max_coords.y + 1):
-        for cz in range(min_coords.z, max_coords.z + 1):
-            for cx in range(min_coords.x, max_coords.x + 1):
-                var cell := _flat_cell(cx, cy, cz)
-                var index := cell_heads[cell]
+        var distance := sqrt(maxf(distance_squared, 0.0000001))
+        var normal := offset / distance if distance > 0.0001 else Vector3.DOWN
+        var penetration := minimum_distance - distance
 
-                while index >= 0:
-                    var next_index := next_in_cell[index]
-                    var offset := positions[index] - center
-                    var distance_squared := offset.length_squared()
+        var grain_velocity := (
+            (cpu_positions[i] - cpu_previous_positions[i]) / SIM_DT
+        )
+        var closing_speed := maxf(
+            0.0,
+            (body_velocity - grain_velocity).dot(normal)
+        )
+        var bias_speed := penetration * CONTACT_BIAS_PER_SECOND
 
-                    if distance_squared < minimum_distance_squared:
-                        var normal: Vector3
-                        var distance: float
+        var impulse_magnitude := reduced_mass * (
+            closing_speed * (1.0 + RESTITUTION) + bias_speed
+        )
+        reaction_impulse -= normal * impulse_magnitude
 
-                        if distance_squared < 0.00000001:
-                            normal = Vector3.UP
-                            distance = 0.0001
-                        else:
-                            distance = sqrt(distance_squared)
-                            normal = offset / distance
-
-                        _wake(index)
-                        contact_flags[index] = 1
-
-                        var penetration := minimum_distance - distance
-                        positions[index] += normal * penetration * 0.92
-
-                        var grain_velocity := velocities[index]
-                        var closing_speed := (body_velocity - grain_velocity).dot(normal)
-
-                        if closing_speed > 0.0:
-                            var transfer_delta_velocity := normal * closing_speed * 0.68
-                            grain_velocity += transfer_delta_velocity
-                            reaction_impulse -= transfer_delta_velocity * GRAIN_MASS
-
-                        velocities[index] = grain_velocity
-                        _move_particle_cell_if_needed(index)
-                        _mark_dirty(index)
-
-                    index = next_index
+    if reaction_impulse.length() > MAX_BODY_REACTION_IMPULSE:
+        reaction_impulse = (
+            reaction_impulse.normalized() * MAX_BODY_REACTION_IMPULSE
+        )
 
     return reaction_impulse
 
-func _cell_coords_for_position(position: Vector3) -> Vector3i:
-    var x := clampi(
-        int(floor((position.x + BOUNDARY_HALF_EXTENT) / CELL_SIZE)),
-        0,
-        grid_x - 1
-    )
-    var y := clampi(int(floor(position.y / CELL_SIZE)), 0, GRID_Y_CELLS - 1)
-    var z := clampi(
-        int(floor((position.z + BOUNDARY_HALF_EXTENT) / CELL_SIZE)),
-        0,
-        grid_z - 1
-    )
-    return Vector3i(x, y, z)
-
-func _cell_for_position(position: Vector3) -> int:
-    var coords := _cell_coords_for_position(position)
-    return _flat_cell(coords.x, coords.y, coords.z)
-
-func _flat_cell(x: int, y: int, z: int) -> int:
-    return (y * grid_z + z) * grid_x + x
-
-func _insert_particle_into_cell(index: int, cell: int) -> void:
-    var head := cell_heads[cell]
-
-    particle_cell[index] = cell
-    prev_in_cell[index] = -1
-    next_in_cell[index] = head
-
-    if head >= 0:
-        prev_in_cell[head] = index
-
-    cell_heads[cell] = index
-
-func _remove_particle_from_cell(index: int) -> void:
-    var cell := particle_cell[index]
-    if cell < 0:
+func _queue_command(
+    center: Vector3,
+    radius: float,
+    vector: Vector3,
+    mode: float
+) -> void:
+    if not gpu_ready or pending_commands.size() >= MAX_COMMANDS:
         return
 
-    var previous := prev_in_cell[index]
-    var next := next_in_cell[index]
-
-    if previous >= 0:
-        next_in_cell[previous] = next
-    else:
-        cell_heads[cell] = next
-
-    if next >= 0:
-        prev_in_cell[next] = previous
-
-    prev_in_cell[index] = -1
-    next_in_cell[index] = -1
-    particle_cell[index] = -1
-
-func _move_particle_cell_if_needed(index: int) -> void:
-    var new_cell := _cell_for_position(positions[index])
-    if new_cell == particle_cell[index]:
-        return
-
-    _remove_particle_from_cell(index)
-    _insert_particle_into_cell(index, new_cell)
+    pending_commands.append({
+        "center": center,
+        "radius": radius,
+        "vector": vector,
+        "mode": mode,
+    })
 
 func surface_height_at(_world_position: Vector3) -> float:
     return PLAYER_SURFACE_Y
 
 func clamp_inside(world_position: Vector3) -> Vector3:
-    # The player's capsule and the grains share the same world boundary.
     var player_radius := 0.30
     var limit := BOUNDARY_HALF_EXTENT - player_radius
     world_position.x = clampf(world_position.x, -limit, limit)
@@ -625,30 +506,10 @@ func grain_count() -> int:
     return PARTICLE_COUNT
 
 func active_grain_count() -> int:
-    return active_indices.size()
+    return PARTICLE_COUNT if gpu_ready else 0
 
 func world_size() -> float:
     return BOUNDARY_HALF_EXTENT * 2.0
 
-func _update_all_visuals() -> void:
-    if multimesh == null:
-        return
-
-    for i in range(PARTICLE_COUNT):
-        multimesh.set_instance_transform(i, Transform3D(Basis.IDENTITY, positions[i]))
-        dirty_flags[i] = 0
-
-    dirty_indices.clear()
-
-func _update_dirty_visuals() -> void:
-    if multimesh == null or dirty_indices.is_empty():
-        return
-
-    for index in dirty_indices:
-        multimesh.set_instance_transform(
-            index,
-            Transform3D(Basis.IDENTITY, positions[index])
-        )
-        dirty_flags[index] = 0
-
-    dirty_indices.clear()
+func solver_name() -> String:
+    return "GPU PBD" if gpu_ready else "GPU PBD unavailable"

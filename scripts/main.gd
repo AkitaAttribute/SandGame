@@ -43,8 +43,8 @@ func _process(delta: float) -> void:
     status_label.text = (
         "WASD move   Space jump   Left click throw   Mouse orbit   Wheel zoom\n"
         + "0.7 g   Player mass: 20 lb / 9.07 kg   Orb fuse: 3 s   "
-        + "Sand grains: %d   Active: %d"
-        % [sand.grain_count(), sand.active_grain_count()]
+        + "Sand grains: %d   Solver: %s"
+        % [sand.grain_count(), sand.solver_name()]
     )
 
 func _build_physical_floor(world_size: float) -> void:
@@ -54,8 +54,6 @@ func _build_physical_floor(world_size: float) -> void:
     floor_body.collision_mask = 1
     add_child(floor_body)
 
-    # This is the same y=0 plane used by the custom grain solver. It is
-    # collision-only: there is no second visible floor mesh.
     var collision := CollisionShape3D.new()
     var shape := BoxShape3D.new()
     shape.size = Vector3(world_size, 0.02, world_size)

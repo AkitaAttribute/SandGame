@@ -45,8 +45,8 @@ jobs:
         run: |
           set -o pipefail
           godot --headless --path . --import 2>&1 | tee /tmp/godot-import.log
-          if grep -E "SCRIPT ERROR:|Parse Error:|Compile Error:|Failed to load script" /tmp/godot-import.log; then
-            echo "Godot reported script compilation errors during import."
+          if grep -E "SCRIPT ERROR:|Parse Error:|Compile Error:|Failed to load script|Shader compilation failed|Failed to compile shader|SPIR-V compilation failed" /tmp/godot-import.log; then
+            echo "Godot reported script or shader compilation errors during import."
             exit 1
           fi
 
@@ -61,8 +61,8 @@ jobs:
           if [[ $status -ne 0 && $status -ne 124 ]]; then
             exit $status
           fi
-          if grep -E "SCRIPT ERROR:|Parse Error:|Compile Error:|Failed to load script" /tmp/godot-runtime.log; then
-            echo "Godot reported script errors while starting the game."
+          if grep -E "SCRIPT ERROR:|Parse Error:|Compile Error:|Failed to load script|Shader compilation failed|Failed to compile shader" /tmp/godot-runtime.log; then
+            echo "Godot reported script or shader errors while starting the game."
             exit 1
           fi
 
@@ -72,8 +72,8 @@ jobs:
           set -o pipefail
           mkdir -p build
           godot --headless --path . --export-release "Windows Desktop" build/SandGame.exe 2>&1 | tee /tmp/godot-export.log
-          if grep -E "SCRIPT ERROR:|Parse Error:|Compile Error:|Failed to load script" /tmp/godot-export.log; then
-            echo "Godot reported script errors during export."
+          if grep -E "SCRIPT ERROR:|Parse Error:|Compile Error:|Failed to load script|Shader compilation failed|Failed to compile shader" /tmp/godot-export.log; then
+            echo "Godot reported script or shader errors during export."
             exit 1
           fi
           test -s build/SandGame.exe

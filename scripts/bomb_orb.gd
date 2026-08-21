@@ -16,7 +16,7 @@ func _ready() -> void:
     add_to_group("physics_projectiles")
     collision_layer = 1
     collision_mask = 1
-    mass = 1.0
+    mass = 0.45
     linear_damp = 0.22
     angular_damp = 0.28
     continuous_cd = true
@@ -78,10 +78,16 @@ func _process(delta: float) -> void:
 
     elapsed += delta
     var progress: float = clampf(elapsed / FUSE_TIME, 0.0, 1.0)
-    var flashes_per_second: float = lerpf(1.4, 17.0, pow(progress, 3.15))
+    var flashes_per_second: float = lerpf(
+        1.4,
+        17.0,
+        pow(progress, 3.15)
+    )
     flash_phase += delta * flashes_per_second
 
-    var red_now: bool = fmod(flash_phase, 1.0) < lerpf(0.24, 0.48, progress)
+    var red_now: bool = (
+        fmod(flash_phase, 1.0) < lerpf(0.24, 0.48, progress)
+    )
     var color: Color = RED if red_now else BLUE
     material.albedo_color = color
     material.emission = color * (0.85 if red_now else 0.55)
