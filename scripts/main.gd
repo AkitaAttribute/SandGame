@@ -3,6 +3,7 @@ extends Node3D
 var sand: SandField
 var player: PlayerController
 var orbit_camera: OrbitCamera
+var pause_menu: PauseMenu
 var status_label: Label
 var status_refresh := 0.0
 
@@ -33,6 +34,10 @@ func _ready() -> void:
 
     _build_ui()
 
+    pause_menu = PauseMenu.new()
+    pause_menu.name = "PauseMenu"
+    add_child(pause_menu)
+
 func _process(delta: float) -> void:
     status_refresh += delta
     if status_label == null or status_refresh < 0.20:
@@ -40,7 +45,7 @@ func _process(delta: float) -> void:
 
     status_refresh = 0.0
     status_label.text = (
-        "WASD move   Space jump   Left click throw   Mouse orbit   Wheel zoom\n"
+        "WASD move   Space jump   Left click throw   Mouse orbit   Wheel zoom   Esc pause\n"
         + "0.7 g   Player mass: 20 lb / 9.07 kg   Orb fuse: 3 s   "
         + "Sand grains: %d   Solver: %s"
         % [sand.grain_count(), sand.solver_name()]

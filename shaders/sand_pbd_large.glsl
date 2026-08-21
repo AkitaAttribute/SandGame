@@ -56,6 +56,16 @@ layout(push_constant, std430) uniform Params {
     uint region_size;
 } pc;
 
+// PBD positional corrections are excellent for keeping grains separate, but
+// turning the full correction back into velocity transfers too much energy
+// through a dense contact network. These coefficients deliberately make grain
+// contacts inelastic while leaving airborne grains almost untouched.
+const float CONTACT_CORRECTION_VELOCITY_TRANSFER = 0.38;
+const float CONTACT_KEEP_PER_CONTACT = 0.86;
+const float DENSE_SETTLE_SPEED = 0.30;
+const float SINGLE_CONTACT_SETTLE_SPEED = 0.10;
+const float MAX_DAMPING_CONTACTS = 6.0;
+
 uint grid_cell_count() {
     return pc.grid_x * pc.grid_z;
 }
@@ -210,6 +220,7 @@ void phase_solve(uint id) {
     vec3 p = positions[id].xyz;
     vec3 p_previous = previous_positions[id].xyz;
     vec3 correction = vec3(0.0);
+    float contact_count = 0.0;
     uvec2 own_cell = cell_coords(p);
     float diameter = pc.grain_radius * 2.0;
     float diameter_squared = diameter * diameter;
@@ -242,6 +253,7 @@ void phase_solve(uint id) {
                     continue;
                 }
 
+                contact_count += 1.0;
                 float distance = sqrt(max(distance_squared, 1e-10));
                 vec3 normal = distance > 1e-5
                     ? delta / distance
@@ -273,6 +285,7 @@ void phase_solve(uint id) {
 
     float limit = pc.boundary_half_extent - pc.grain_radius;
     if (p.y < pc.grain_radius) {
+        contact_count += 1.0;
         float penetration = pc.grain_radius - p.y;
         correction.y += penetration;
         vec2 lateral = p.xz - p_previous.xz;
@@ -289,42 +302,81 @@ void phase_solve(uint id) {
     }
 
     if (p.x < -limit) {
+        contact_count += 1.0;
         correction.x += -limit - p.x;
     } else if (p.x > limit) {
+        contact_count += 1.0;
         correction.x += limit - p.x;
     }
     if (p.z < -limit) {
+        contact_count += 1.0;
         correction.z += -limit - p.z;
     } else if (p.z > limit) {
+        contact_count += 1.0;
         correction.z += limit - p.z;
     }
 
-    corrections[id] = vec4(correction, 0.0);
+    corrections[id] = vec4(
+        correction,
+        min(contact_count, MAX_DAMPING_CONTACTS)
+    );
 }
 
 void phase_apply(uint id) {
+    float contacts = corrections[id].w;
     positions[id].xyz += corrections[id].xyz;
-    corrections[id] = vec4(0.0);
+    // Preserve contact count for finalization; xyz is cleared for the next
+    // solver iteration.
+    corrections[id] = vec4(0.0, 0.0, 0.0, contacts);
 }
 
 void phase_finalize(uint id) {
     vec3 p = positions[id].xyz;
     vec3 previous = previous_positions[id].xyz;
     vec3 old_velocity = velocities[id].xyz;
-    vec3 velocity = (p - previous) / max(pc.dt, 1e-5);
+    vec3 raw_velocity = (p - previous) / max(pc.dt, 1e-5);
+    float contacts = corrections[id].w;
+    vec3 velocity = raw_velocity;
+
+    if (contacts > 0.0) {
+        // Constraint projection is necessary to prevent overlap, but using the
+        // entire positional correction as next-frame velocity is what allowed
+        // a tiny shove to migrate across the whole packed bed. Transfer only a
+        // fraction of that correction-derived velocity and absorb energy for
+        // every simultaneous contact.
+        vec3 correction_velocity = raw_velocity - old_velocity;
+        velocity = old_velocity
+            + correction_velocity * CONTACT_CORRECTION_VELOCITY_TRANSFER;
+
+        float contact_keep = pow(
+            CONTACT_KEEP_PER_CONTACT,
+            min(contacts, MAX_DAMPING_CONTACTS)
+        );
+        velocity *= contact_keep;
+
+        float speed_squared = dot(velocity, velocity);
+        float dense_limit_squared = DENSE_SETTLE_SPEED * DENSE_SETTLE_SPEED;
+        float single_limit_squared = (
+            SINGLE_CONTACT_SETTLE_SPEED * SINGLE_CONTACT_SETTLE_SPEED
+        );
+        if (
+            (contacts >= 2.0 && speed_squared < dense_limit_squared)
+            || speed_squared < single_limit_squared
+        ) {
+            velocity = vec3(0.0);
+        }
+    } else {
+        // Airborne grains keep nearly all of their energy; contact networks are
+        // where sand should dissipate it.
+        velocity *= pc.velocity_damping;
+    }
 
     if (p.y <= pc.grain_radius + 1e-4 && old_velocity.y < 0.0) {
         velocity.y = max(velocity.y, -old_velocity.y * pc.restitution);
     }
-    velocity *= pc.velocity_damping;
-    if (
-        p.y <= pc.grain_radius + 0.002
-        && dot(velocity, velocity) < 0.0009
-    ) {
-        velocity = vec3(0.0);
-    }
 
     velocities[id] = vec4(velocity, 0.0);
+    corrections[id] = vec4(0.0);
     write_particle_texture(id, p);
 }
 

@@ -6,7 +6,7 @@ const BLUE := Color(0.08, 0.42, 1.0)
 const RED := Color(1.0, 0.08, 0.05)
 const ORB_RADIUS := 0.17
 const SAND_BLAST_RADIUS := 2.7
-const SAND_BLAST_SPEED := 12.5
+const SAND_BLAST_SPEED := 45.0
 
 var elapsed := 0.0
 var flash_phase := 0.0
