@@ -1,12 +1,18 @@
 class_name BombOrb
 extends RigidBody3D
 
-const FUSE_TIME := 3.0
 const BLUE := Color(0.08, 0.42, 1.0)
 const RED := Color(1.0, 0.08, 0.05)
 const ORB_RADIUS := 0.17
 const SAND_BLAST_RADIUS := 2.7
-const SAND_BLAST_SPEED := 45.0
+
+const DEFAULT_THROW_FORCE := 9
+const DEFAULT_EXPLOSION_FORCE := 45
+const DEFAULT_FUSE_DURATION := 3
+
+static var throw_force: int = DEFAULT_THROW_FORCE
+static var explosion_force: int = DEFAULT_EXPLOSION_FORCE
+static var fuse_duration: int = DEFAULT_FUSE_DURATION
 
 var elapsed := 0.0
 var flash_phase := 0.0
@@ -79,7 +85,8 @@ func _process(delta: float) -> void:
         return
 
     elapsed += delta
-    var progress: float = clampf(elapsed / FUSE_TIME, 0.0, 1.0)
+    var fuse_time := maxf(1.0, float(BombOrb.fuse_duration))
+    var progress: float = clampf(elapsed / fuse_time, 0.0, 1.0)
     var flashes_per_second: float = lerpf(
         1.4,
         17.0,
@@ -94,7 +101,7 @@ func _process(delta: float) -> void:
     material.albedo_color = color
     material.emission = color * (0.85 if red_now else 0.55)
 
-    if elapsed >= FUSE_TIME:
+    if elapsed >= fuse_time:
         _detonate()
 
 func _detonate() -> void:
@@ -109,7 +116,7 @@ func _detonate() -> void:
         sand.apply_radial_impulse(
             global_position,
             SAND_BLAST_RADIUS,
-            SAND_BLAST_SPEED
+            float(BombOrb.explosion_force)
         )
 
     for node in get_tree().get_nodes_in_group("player"):

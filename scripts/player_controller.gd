@@ -151,7 +151,11 @@ func _throw_projectile() -> void:
     get_tree().current_scene.add_child(orb)
     orb.global_position = global_position + Vector3.UP * 1.0 + forward * 0.48 + right * 0.15
 
-    var launch_velocity := forward * 8.7 + Vector3.UP * 2.8
+    var throw_force := float(BombOrb.throw_force)
+    var launch_velocity := (
+        forward * throw_force
+        + Vector3.UP * throw_force * (2.8 / 8.7)
+    )
     orb.apply_central_impulse(launch_velocity * orb.mass)
 
     await get_tree().create_timer(0.28).timeout
@@ -164,7 +168,7 @@ func _discover_animations() -> void:
     if animation_player == null:
         return
 
-    var animations := animation_player.get_animation_list()
+    var animations = animation_player.get_animation_list()
     idle_animation = _find_animation_name(animations, ["idle", "standing", "stand"])
     walk_animation = _find_animation_name(animations, ["walk", "walking", "run"])
     throw_animation = _find_animation_name(animations, ["throw", "spell", "cast", "attack", "shoot"])

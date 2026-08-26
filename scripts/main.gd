@@ -44,9 +44,11 @@ func _process(delta: float) -> void:
         return
 
     status_refresh = 0.0
+    var fuse_text := "Orb fuse: %d s   " % BombOrb.fuse_duration
     status_label.text = (
         "WASD move   Space jump   Left click throw   Mouse orbit   Wheel zoom   Esc pause\n"
-        + "0.7 g   Player mass: 20 lb / 9.07 kg   Orb fuse: 3 s   "
+        + "0.7 g   Player mass: 20 lb / 9.07 kg   "
+        + fuse_text
         + "Sand grains: %d   Solver: %s"
         % [sand.grain_count(), sand.solver_name()]
     )
