@@ -49,7 +49,7 @@ func _process(delta: float) -> void:
         "WASD move   Space jump   Left click throw   Mouse orbit   Wheel zoom   Esc pause\n"
         + "0.7 g   Player mass: 20 lb / 9.07 kg   "
         + fuse_text
-        + "Sand grains: %d   Solver: %s"
+        + "Sand grains: %d   Solver: %s   Rest: support/lifetime"
         % [sand.grain_count(), sand.solver_name()]
     )
 
