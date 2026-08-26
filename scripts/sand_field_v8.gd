@@ -4,6 +4,7 @@ extends SandFieldV6
 # Global render path for the per-grain locked solver.
 # Rendering no longer has region/chunk ownership: all 800k grains live in one
 # MultiMesh and INSTANCE_ID maps directly to the persistent particle ID.
+# No render chunks are created by this runtime path.
 func _build_full_grain_rendering() -> void:
     full_render_instances.clear()
     full_render_materials.clear()
