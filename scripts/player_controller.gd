@@ -151,11 +151,10 @@ func _throw_projectile() -> void:
     get_tree().current_scene.add_child(orb)
     orb.global_position = global_position + Vector3.UP * 1.0 + forward * 0.48 + right * 0.15
 
+    # Bombs are intentionally launched horizontally. Gravity may pull them
+    # downward after release, but their own throw impulse never adds +Y motion.
     var throw_force := float(BombOrb.throw_force)
-    var launch_velocity := (
-        forward * throw_force
-        + Vector3.UP * throw_force * (2.8 / 8.7)
-    )
+    var launch_velocity := forward * throw_force
     orb.apply_central_impulse(launch_velocity * orb.mass)
 
     await get_tree().create_timer(0.28).timeout

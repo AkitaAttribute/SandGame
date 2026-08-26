@@ -4,14 +4,15 @@ extends RigidBody3D
 const BLUE := Color(0.08, 0.42, 1.0)
 const RED := Color(1.0, 0.08, 0.05)
 const ORB_RADIUS := 0.17
-const SAND_BLAST_RADIUS := 2.7
 
-const DEFAULT_THROW_FORCE := 9
-const DEFAULT_EXPLOSION_FORCE := 45
+const DEFAULT_THROW_FORCE := 15
+const DEFAULT_EXPLOSION_FORCE := 250
+const DEFAULT_BLAST_RADIUS := 2.7
 const DEFAULT_FUSE_DURATION := 3
 
 static var throw_force: int = DEFAULT_THROW_FORCE
 static var explosion_force: int = DEFAULT_EXPLOSION_FORCE
+static var blast_radius: float = DEFAULT_BLAST_RADIUS
 static var fuse_duration: int = DEFAULT_FUSE_DURATION
 
 var elapsed := 0.0
@@ -59,8 +60,17 @@ func _ready() -> void:
 
     var physics_material := PhysicsMaterial.new()
     physics_material.friction = 0.88
-    physics_material.bounce = 0.12
+    physics_material.bounce = 0.0
     physics_material_override = physics_material
+
+func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
+    # The bomb is intentionally one-way in Y: gravity may move it downward and
+    # collision support may stop that descent, but no contact/impulse may turn
+    # its vertical velocity positive and launch it upward.
+    var body_velocity := state.linear_velocity
+    if body_velocity.y > 0.0:
+        body_velocity.y = 0.0
+        state.linear_velocity = body_velocity
 
 func _physics_process(delta: float) -> void:
     if exploded:
@@ -70,6 +80,11 @@ func _physics_process(delta: float) -> void:
         sand = get_tree().get_first_node_in_group("sand") as SandField
         return
 
+    var current_velocity := linear_velocity
+    if current_velocity.y > 0.0:
+        current_velocity.y = 0.0
+        linear_velocity = current_velocity
+
     var reaction_impulse: Vector3 = sand.interact_sphere(
         global_position,
         ORB_RADIUS,
@@ -77,6 +92,13 @@ func _physics_process(delta: float) -> void:
         mass,
         delta
     )
+
+    # Upward grain support is allowed only far enough to cancel existing
+    # downward velocity. It can never reverse the bomb into upward motion.
+    if reaction_impulse.y > 0.0:
+        var max_upward_impulse := maxf(0.0, -linear_velocity.y * mass)
+        reaction_impulse.y = minf(reaction_impulse.y, max_upward_impulse)
+
     if reaction_impulse.length_squared() > 0.0000001:
         apply_central_impulse(reaction_impulse)
 
@@ -115,7 +137,7 @@ func _detonate() -> void:
     if sand != null:
         sand.apply_radial_impulse(
             global_position,
-            SAND_BLAST_RADIUS,
+            maxf(0.1, BombOrb.blast_radius),
             float(BombOrb.explosion_force)
         )
 

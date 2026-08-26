@@ -2,21 +2,22 @@ class_name PauseMenu
 extends CanvasLayer
 
 const SETTING_LIMITS := {
-    "throw_force": Vector2i(0, 100),
-    "explosion_force": Vector2i(0, 500),
-    "fuse_duration": Vector2i(1, 60),
+    "throw_force": Vector2(0.0, 100.0),
+    "explosion_force": Vector2(0.0, 1000.0),
+    "blast_radius": Vector2(0.1, 50.0),
+    "fuse_duration": Vector2(1.0, 60.0),
 }
 
 var overlay: ColorRect
 var previous_mouse_mode := Input.MOUSE_MODE_CAPTURED
-var value_labels: Dictionary = {}
+var value_edits: Dictionary = {}
 
 func _ready() -> void:
     process_mode = Node.PROCESS_MODE_ALWAYS
     layer = 100
     _build_overlay()
 
-func _unhandled_input(event: InputEvent) -> void:
+func _input(event: InputEvent) -> void:
     if (
         event is InputEventKey
         and event.keycode == KEY_ESCAPE
@@ -56,7 +57,7 @@ func _build_overlay() -> void:
     overlay.add_child(center)
 
     var panel := PanelContainer.new()
-    panel.custom_minimum_size = Vector2(460.0, 0.0)
+    panel.custom_minimum_size = Vector2(500.0, 0.0)
     var panel_style := StyleBoxFlat.new()
     panel_style.bg_color = Color(0.08, 0.09, 0.11, 0.96)
     panel_style.border_width_left = 1
@@ -97,9 +98,17 @@ func _build_overlay() -> void:
 
     _add_counter_row(vbox, "throw_force", "Throw force")
     _add_counter_row(vbox, "explosion_force", "Explosion force")
+    _add_counter_row(vbox, "blast_radius", "Explosion radius")
     _add_counter_row(vbox, "fuse_duration", "Bomb fuse (seconds)")
 
     vbox.add_child(HSeparator.new())
+
+    var hint := Label.new()
+    hint.text = "Type a value or use - / + (step = 1)"
+    hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    hint.add_theme_font_size_override("font_size", 15)
+    hint.add_theme_color_override("font_color", Color(0.68, 0.70, 0.75))
+    vbox.add_child(hint)
 
     var resume := Label.new()
     resume.text = "Esc to resume"
@@ -129,14 +138,15 @@ func _add_counter_row(parent: VBoxContainer, setting: String, title: String) -> 
     minus.pressed.connect(_change_setting.bind(setting, -1))
     row.add_child(minus)
 
-    var value_label := Label.new()
-    value_label.custom_minimum_size = Vector2(72.0, 38.0)
-    value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-    value_label.add_theme_font_size_override("font_size", 20)
-    value_label.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0))
-    row.add_child(value_label)
-    value_labels[setting] = value_label
+    var edit := LineEdit.new()
+    edit.custom_minimum_size = Vector2(96.0, 38.0)
+    edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
+    edit.add_theme_font_size_override("font_size", 20)
+    edit.select_all_on_focus = true
+    edit.text_submitted.connect(_typed_setting_submitted.bind(setting))
+    edit.focus_exited.connect(_typed_setting_focus_exited.bind(setting))
+    row.add_child(edit)
+    value_edits[setting] = edit
 
     var plus := Button.new()
     plus.text = "+"
@@ -149,39 +159,80 @@ func _change_setting(setting: String, delta: int) -> void:
     if not SETTING_LIMITS.has(setting):
         return
 
-    var bounds: Vector2i = SETTING_LIMITS[setting]
-    var value := clampi(
-        _get_setting_value(setting) + delta,
+    # If the user typed a value and then clicked +/- without pressing Enter,
+    # commit the typed value first and apply the one-unit step from there.
+    _commit_typed_setting(setting)
+
+    var bounds: Vector2 = SETTING_LIMITS[setting]
+    var value := clampf(
+        _get_setting_value(setting) + float(delta),
         bounds.x,
         bounds.y
     )
     _set_setting_value(setting, value)
     _refresh_setting(setting)
 
-func _get_setting_value(setting: String) -> int:
-    match setting:
-        "throw_force":
-            return BombOrb.throw_force
-        "explosion_force":
-            return BombOrb.explosion_force
-        "fuse_duration":
-            return BombOrb.fuse_duration
-    return 0
+func _typed_setting_submitted(_text: String, setting: String) -> void:
+    _commit_typed_setting(setting)
+    var edit := value_edits.get(setting) as LineEdit
+    if edit != null:
+        edit.release_focus()
 
-func _set_setting_value(setting: String, value: int) -> void:
+func _typed_setting_focus_exited(setting: String) -> void:
+    _commit_typed_setting(setting)
+
+func _commit_typed_setting(setting: String) -> void:
+    if not SETTING_LIMITS.has(setting):
+        return
+
+    var edit := value_edits.get(setting) as LineEdit
+    if edit == null:
+        return
+
+    var text := edit.text.strip_edges()
+    if not text.is_valid_float():
+        _refresh_setting(setting)
+        return
+
+    var bounds: Vector2 = SETTING_LIMITS[setting]
+    var value := clampf(float(text), bounds.x, bounds.y)
+    _set_setting_value(setting, value)
+    _refresh_setting(setting)
+
+func _get_setting_value(setting: String) -> float:
     match setting:
         "throw_force":
-            BombOrb.throw_force = value
+            return float(BombOrb.throw_force)
         "explosion_force":
-            BombOrb.explosion_force = value
+            return float(BombOrb.explosion_force)
+        "blast_radius":
+            return BombOrb.blast_radius
         "fuse_duration":
-            BombOrb.fuse_duration = value
+            return float(BombOrb.fuse_duration)
+    return 0.0
+
+func _set_setting_value(setting: String, value: float) -> void:
+    match setting:
+        "throw_force":
+            BombOrb.throw_force = int(round(value))
+        "explosion_force":
+            BombOrb.explosion_force = int(round(value))
+        "blast_radius":
+            BombOrb.blast_radius = value
+        "fuse_duration":
+            BombOrb.fuse_duration = int(round(value))
 
 func _refresh_values() -> void:
-    for setting in value_labels.keys():
+    for setting in value_edits.keys():
         _refresh_setting(String(setting))
 
 func _refresh_setting(setting: String) -> void:
-    var label := value_labels.get(setting) as Label
-    if label != null:
-        label.text = str(_get_setting_value(setting))
+    var edit := value_edits.get(setting) as LineEdit
+    if edit == null:
+        return
+
+    var value := _get_setting_value(setting)
+    if setting == "blast_radius":
+        edit.text = str(value)
+    else:
+        edit.text = str(int(round(value)))
