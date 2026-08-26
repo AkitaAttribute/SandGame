@@ -79,10 +79,18 @@ const float WAKE_IMPULSE_SCALE = 4096.0;
 
 const float CONTACT_CORRECTION_VELOCITY_TRANSFER = 0.18;
 const float CONTACT_KEEP_PER_CONTACT = 0.64;
-const float DENSE_SLEEP_SPEED = 0.22;
-const float SINGLE_SLEEP_SPEED = 0.075;
-const uint SLEEP_STEPS = 5u;
 const float MAX_DAMPING_CONTACTS = 6.0;
+
+// Rest is based on actual displacement and real support, not the derived PBD
+// velocity. The low 16 bits of grain_sleep store active age; the high 16 bits
+// store consecutive quiet supported steps.
+const uint ACTIVE_LIFETIME_STEPS = 90u;
+const uint HARD_SETTLE_STEPS = 180u;
+const uint QUIET_STEPS_TO_LOCK = 5u;
+const float REST_DISPLACEMENT = 0.0020;
+const float EXPIRED_REST_DISPLACEMENT = 0.0040;
+const float EXPIRED_LATERAL_KEEP = 0.68;
+const float SUPPORT_MARKER = 8.0;
 
 uint grid_cell_count() {
     return pc.grid_x * pc.grid_z;
@@ -304,6 +312,7 @@ void phase_solve(uint id) {
     vec3 own_velocity = velocities[id].xyz;
     vec3 correction = vec3(0.0);
     float contact_count = 0.0;
+    bool has_support = false;
 
     uvec2 own_cell = cell_coords(p);
     float diameter = pc.grain_radius * 2.0;
@@ -352,6 +361,12 @@ void phase_solve(uint id) {
                     ? delta / distance
                     : vec3(1.0, 0.0, 0.0);
                 float penetration = diameter - distance;
+
+                // A contact substantially below this grain is actual support.
+                // Side/ceiling contacts do not qualify a grain to sleep.
+                if (normal.y < -0.35) {
+                    has_support = true;
+                }
 
                 uint other_state = grain_states[other_id];
                 bool other_locked = other_state == 0u;
@@ -421,6 +436,7 @@ void phase_solve(uint id) {
 
     if (p.y < pc.grain_radius) {
         contact_count += 1.0;
+        has_support = true;
         float penetration = pc.grain_radius - p.y;
         correction.y += penetration;
 
@@ -462,6 +478,7 @@ void phase_solve(uint id) {
     corrections[id] = vec4(
         correction,
         min(contact_count, MAX_DAMPING_CONTACTS)
+            + (has_support ? SUPPORT_MARKER : 0.0)
     );
 }
 
@@ -471,9 +488,9 @@ void phase_apply(uint id) {
         return;
     }
 
-    float contacts = corrections[id].w;
+    float contact_data = corrections[id].w;
     positions[id].xyz += corrections[id].xyz;
-    corrections[id] = vec4(0.0, 0.0, 0.0, contacts);
+    corrections[id] = vec4(0.0, 0.0, 0.0, contact_data);
 }
 
 void phase_finalize(uint id) {
@@ -490,7 +507,11 @@ void phase_finalize(uint id) {
     vec3 raw_velocity =
         (p - previous) / max(pc.dt, 1e-5);
 
-    float contacts = corrections[id].w;
+    float contact_data = corrections[id].w;
+    bool has_support = contact_data >= SUPPORT_MARKER;
+    float contacts = has_support
+        ? contact_data - SUPPORT_MARKER
+        : contact_data;
     vec3 velocity = raw_velocity;
 
     if (contacts > 0.0) {
@@ -519,25 +540,43 @@ void phase_finalize(uint id) {
         );
     }
 
-    float speed = length(velocity);
-    bool densely_supported = contacts >= 2.0;
-    bool very_slow = speed < SINGLE_SLEEP_SPEED;
-    bool slow_and_supported =
-        densely_supported && speed < DENSE_SLEEP_SPEED;
+    uint packed_sleep = grain_sleep[id];
+    uint age = packed_sleep & 0xffffu;
+    uint quiet_steps = (packed_sleep >> 16u) & 0xffffu;
+    age = min(age + 1u, 0xffffu);
 
-    uint sleep_count = grain_sleep[id];
-    if (very_slow || slow_and_supported) {
-        sleep_count += 1u;
-    } else {
-        sleep_count = 0u;
+    bool lifetime_expired = age >= ACTIVE_LIFETIME_STEPS;
+    if (lifetime_expired) {
+        // State 1 remains physically active but cannot wake another locked grain.
+        grain_states[id] = 1u;
+        velocity.x *= EXPIRED_LATERAL_KEEP;
+        velocity.z *= EXPIRED_LATERAL_KEEP;
     }
 
-    if (sleep_count >= SLEEP_STEPS) {
+    float displacement = length(p - previous);
+    float rest_threshold = lifetime_expired
+        ? EXPIRED_REST_DISPLACEMENT
+        : REST_DISPLACEMENT;
+
+    if (has_support && displacement <= rest_threshold) {
+        quiet_steps = min(quiet_steps + 1u, 0xffffu);
+    } else {
+        quiet_steps = 0u;
+    }
+
+    bool quiet_supported = quiet_steps >= QUIET_STEPS_TO_LOCK;
+    bool hard_supported_expiry = (
+        has_support
+        && age >= HARD_SETTLE_STEPS
+        && abs(velocity.y) < 0.35
+    );
+
+    if (quiet_supported || hard_supported_expiry) {
         grain_states[id] = 0u;
         grain_sleep[id] = 0u;
         velocity = vec3(0.0);
     } else {
-        grain_sleep[id] = sleep_count;
+        grain_sleep[id] = (quiet_steps << 16u) | age;
         atomicAdd(active_count[0], 1u);
     }
 
