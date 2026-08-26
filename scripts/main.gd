@@ -10,7 +10,7 @@ var status_refresh := 0.0
 func _ready() -> void:
     _build_lighting()
 
-    sand = SandFieldV6.new()
+    sand = SandFieldV8.new()
     sand.name = "SandField"
     add_child(sand)
 
