@@ -44,13 +44,14 @@ func _process(delta: float) -> void:
         return
 
     status_refresh = 0.0
-    var fuse_text := "Orb fuse: %d s   " % BombOrb.fuse_duration
+    var active_grains := 0
+    if sand is SandFieldV6:
+        active_grains = (sand as SandFieldV6).active_grain_count()
+
     status_label.text = (
         "WASD move   Space jump   Left click throw   Mouse orbit   Wheel zoom   Esc pause\n"
-        + "0.7 g   Player mass: 20 lb / 9.07 kg   "
-        + fuse_text
-        + "Sand grains: %d   Solver: %s   Rest: support/lifetime"
-        % [sand.grain_count(), sand.solver_name()]
+        + "FPS: %d   Active grains: %d"
+        % [Engine.get_frames_per_second(), active_grains]
     )
 
 func _build_physical_floor(world_size: float) -> void:
