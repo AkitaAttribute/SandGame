@@ -1,8 +1,9 @@
 name: Windows prototype build
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
+  push:
+    branches:
+      - prototype/initial-sand-sim
   workflow_dispatch:
 
 permissions:
@@ -82,7 +83,7 @@ jobs:
       - name: Upload Windows executable
         uses: actions/upload-artifact@v4
         with:
-          name: SandGame-Windows-${{ github.event.pull_request.head.sha || github.sha }}
+          name: SandGame-Windows-${{ github.sha }}
           path: build/SandGame.exe
           if-no-files-found: error
           retention-days: 14
