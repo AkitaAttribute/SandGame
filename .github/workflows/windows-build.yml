@@ -1,9 +1,13 @@
-name: Windows prototype build
+name: Windows skee-ball prototype build
 
 on:
   push:
     branches:
-      - prototype/initial-sand-sim
+      - prototype/SkeeBall-Initial
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 permissions:
@@ -17,13 +21,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Fetch KayKit Skeleton assets
-        shell: bash
-        run: |
-          git clone --depth 1 https://github.com/KayKit-Game-Assets/KayKit-Character-Pack-Skeletons-1.0.git /tmp/kaykit
-          mkdir -p addons
-          cp -R /tmp/kaykit/addons/kaykit_character_pack_skeletons addons/
 
       - name: Install Godot 4.7.1 and export templates
         shell: bash
@@ -72,18 +69,18 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p build
-          godot --headless --path . --export-release "Windows Desktop" build/SandGame.exe 2>&1 | tee /tmp/godot-export.log
+          godot --headless --path . --export-release "Windows Desktop" build/SkeeBallPrototype.exe 2>&1 | tee /tmp/godot-export.log
           if grep -E "SCRIPT ERROR:|Parse Error:|Compile Error:|Failed to load script|Shader compilation failed|Failed to compile shader" /tmp/godot-export.log; then
             echo "Godot reported script or shader errors during export."
             exit 1
           fi
-          test -s build/SandGame.exe
-          ls -lh build/SandGame.exe
+          test -s build/SkeeBallPrototype.exe
+          ls -lh build/SkeeBallPrototype.exe
 
       - name: Upload Windows executable
         uses: actions/upload-artifact@v4
         with:
-          name: SandGame-Windows-${{ github.sha }}
-          path: build/SandGame.exe
+          name: SkeeBall-Windows-${{ github.sha }}
+          path: build/SkeeBallPrototype.exe
           if-no-files-found: error
           retention-days: 14

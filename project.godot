@@ -3,7 +3,7 @@
 config_version=5
 
 [application]
-config/name="SandGame"
+config/name="SkeeBall Prototype"
 run/main_scene="res://main.tscn"
 
 [display]
@@ -16,8 +16,8 @@ window/size/window_height_override=720
 renderer/rendering_method="forward_plus"
 renderer/rendering_method.mobile="mobile"
 rendering_device/fallback_to_opengl3=false
-environment/defaults/default_clear_color=Color(0.48, 0.72, 0.9, 1)
+environment/defaults/default_clear_color=Color(0.055, 0.018, 0.012, 1)
 
 [physics]
-3d/default_gravity=6.867
+3d/default_gravity=9.81
 3d/default_gravity_vector=Vector3(0, -1, 0)
