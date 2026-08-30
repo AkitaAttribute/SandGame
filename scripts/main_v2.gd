@@ -7,7 +7,7 @@ func _ready() -> void:
         remove_child(machine)
         machine.free()
 
-    machine = SkeeBallMachineV4.new()
+    machine = SkeeBallMachineV5.new()
     machine.name = "SkeeBallMachine"
     add_child(machine)
     machine.scored.connect(_on_machine_scored)
