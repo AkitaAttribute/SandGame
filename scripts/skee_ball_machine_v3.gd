@@ -51,7 +51,6 @@ const R100 := 2.25 * INCH
 const CIRCLE_SEGMENTS := 128
 const RING_LIFT := 0.035 * INCH
 const REAR_CAVITY_DEPTH := 6.0 * INCH
-const THROAT_THICKNESS := 0.22 * INCH
 const LABEL_FACE_OFFSET := 0.030 * INCH
 
 func _build_materials() -> void:
