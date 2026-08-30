@@ -1,11 +1,11 @@
 class_name SkeeBallMachineV3
 extends SkeeBallMachineV2
 
-# Physics-first reproduction of the classic target shown in the supplied
-# reference image. Commercial Classic documentation gives 3-inch balls,
-# 4-inch playfield holes, 4-inch-high target rubber, and the replacement-strip
-# lengths used below to reconstruct the target radii.
-const FACE_WIDTH := 33.0 * INCH
+# Physics-first reconstruction of the single classic target shown in the
+# supplied cabinet reference. All dimensions in this script are local machine
+# dimensions; SkeeBallMachine applies the existing 4x presentation scale.
+# The active ball is a 3-inch ball in these same local dimensions.
+const FACE_WIDTH := 34.0 * INCH
 const HEAD_WIDTH := 36.0 * INCH
 const FACE_LENGTH := 38.0 * INCH
 const FACE_BOARD_THICKNESS := 0.75 * INCH
@@ -13,40 +13,71 @@ const FACE_V := Vector3(0.0, 0.70710678, -0.70710678)
 const FACE_N := Vector3(0.0, 0.70710678, 0.70710678)
 const FACE_RIGHT := Vector3.RIGHT
 
-# A physical machine leaves a miss slot between the kicker and target. Keep it
-# only slightly wider than the 3-inch commercial ball instead of the huge gap
-# used by the earlier prototype.
-const MISS_SLOT := 3.40 * INCH
-const FACE_BOTTOM := Vector3(0.0, 0.64695, -0.71406)
+# Keep an honest jump gap, but account for the fact that a 4-inch-tall target
+# wall projects toward the kicker on the inclined playfield. The lower U does
+# not begin until four inches up the face, so its leading edge stays clear.
+const MISS_SLOT := 5.75 * INCH
+const FACE_BOTTOM := Vector3(0.0, 0.6600, -0.77375)
 
-# Target replacement-strip lengths from the Classic service parts list.
-# Circular strip length -> wall center-line radius.
-const U_CENTER_V := 13.0 * INCH
-const U_RADIUS := 13.0 * INCH
-const U_LEG_TOP_V := 38.0 * INCH
-const BIG_CIRCLE_RADIUS := (60.0 * INCH) / TAU
-const R30 := (21.25 * INCH) / TAU
-const R40 := (19.44 * INCH) / TAU
-const R50 := (17.56 * INCH) / TAU
-const R100 := (13.31 * INCH) / TAU
+# Playable opening is fractionally generous compared with the nominal 4-inch
+# hole. A 3-inch ball therefore has 0.55 inches of radial clearance, which is
+# enough to tolerate rigid-body contact without making the holes look oversized.
+const PLAY_HOLE_RADIUS := 2.05 * INCH
+const PLAY_HOLE_DIAMETER := PLAY_HOLE_RADIUS * 2.0
+const BALL_DIAMETER := 3.0 * INCH
+
+# Clean, non-intersecting target layout derived from the supplied reference.
+# The U and large circle are capture guides; all seven scores still drain
+# through true openings in the backing.
+const U_CENTER_V := 14.75 * INCH
+const U_RADIUS := 10.75 * INCH
+const U_LEG_TOP_V := 31.0 * INCH
+const BIG_CIRCLE_CENTER_V := 15.50 * INCH
+const BIG_CIRCLE_RADIUS := 8.25 * INCH
+
+const T10_V := 7.00 * INCH
+const T20_V := 11.50 * INCH
+const T30_V := 17.00 * INCH
+const T40_V := 27.50 * INCH
+const T50_V := 34.00 * INCH
+const T100_V := 34.50 * INCH
+const T100_X := 13.75 * INCH
+
+const R30 := 3.25 * INCH
+const R40 := 2.95 * INCH
+const R50 := 2.65 * INCH
+const R100 := 2.25 * INCH
+
 const CIRCLE_SEGMENTS := 128
-const RING_LIFT := 0.0015
+const RING_LIFT := 0.035 * INCH
 const REAR_CAVITY_DEPTH := 6.0 * INCH
+const THROAT_THICKNESS := 0.22 * INCH
+const LABEL_FACE_OFFSET := 0.030 * INCH
 
 func _build_materials() -> void:
     super._build_materials()
-    # Match the dark target deck / white rubber look while keeping everything
-    # matte enough that grazing-angle highlights do not shimmer.
     target_material.albedo_color = Color(0.18, 0.070, 0.040)
-    target_material.roughness = 0.94
+    target_material.roughness = 0.96
+    target_material.metallic = 0.0
     hole_material.albedo_color = Color(0.94, 0.93, 0.89)
-    hole_material.roughness = 0.72
+    hole_material.roughness = 0.78
     hole_material.metallic = 0.0
     target_physics_material.friction = 0.80
     target_physics_material.bounce = 0.025
 
 func _target_point(u: float, v: float, normal_offset: float = 0.0) -> Vector3:
     return FACE_BOTTOM + FACE_RIGHT * u + FACE_V * v + FACE_N * normal_offset
+
+func _all_score_targets() -> Array[Dictionary]:
+    return [
+        {"points": 10, "u": 0.0, "v": T10_V, "id": "10"},
+        {"points": 20, "u": 0.0, "v": T20_V, "id": "20"},
+        {"points": 30, "u": 0.0, "v": T30_V, "id": "30"},
+        {"points": 40, "u": 0.0, "v": T40_V, "id": "40"},
+        {"points": 50, "u": 0.0, "v": T50_V, "id": "50"},
+        {"points": 100, "u": -T100_X, "v": T100_V, "id": "100L"},
+        {"points": 100, "u": T100_X, "v": T100_V, "id": "100R"},
+    ]
 
 func _build_playfield_cabinet() -> void:
     var head_front_z := ALLEY_REAR_Z + 0.10
@@ -74,8 +105,6 @@ func _build_playfield_cabinet() -> void:
         cabinet_material
     )
 
-    # Yellow rails visually frame the single active machine, as in the supplied
-    # cabinet reference. They also provide honest physical side containment.
     var face_basis := Basis(FACE_RIGHT, FACE_N, FACE_V).orthonormalized()
     for side in [-1.0, 1.0]:
         _add_oriented_static_box(
@@ -92,33 +121,37 @@ func _build_target_board() -> void:
     _build_perforated_target_board()
     _build_rear_drop_cavity()
 
-    # 10-point boundary: a wide U. The chosen width deliberately leaves a
-    # greater-than-ball-diameter bypass lane outside each leg.
-    _add_10_u_wall()
+    # Outer 10 target: one clean U-shaped CSG body. Its side bypass lanes are
+    # 6.125 inches wide before the frame, versus a 3-inch ball diameter.
+    _add_csg_u_wall(
+        "Target10U",
+        U_CENTER_V,
+        U_RADIUS,
+        U_LEG_TOP_V,
+        GUIDE_HEIGHT,
+        GUIDE_THICKNESS
+    )
     _add_face_label("Target10Label", 10, 0.0, U_CENTER_V, U_RADIUS)
 
-    # Large full circle that forms the next capture region.
-    _add_clean_round_wall(
+    # Large 20 capture ring. It is wholly nested inside the U and has no shared
+    # or coplanar geometry with it.
+    _add_csg_ring(
         "Target20Circle",
         0.0,
-        U_CENTER_V,
+        BIG_CIRCLE_CENTER_V,
         BIG_CIRCLE_RADIUS,
         GUIDE_HEIGHT,
         GUIDE_THICKNESS,
         RING_LIFT
     )
-    _add_face_label("Target20Label", 20, 0.0, U_CENTER_V, BIG_CIRCLE_RADIUS)
+    _add_face_label("Target20Label", 20, 0.0, BIG_CIRCLE_CENTER_V, BIG_CIRCLE_RADIUS)
 
-    # The progressively smaller targets use the documented replacement-strip
-    # lengths, so their openings/capture walls are no longer arbitrary.
-    _add_scoring_cup("Target30", 30, 0.0, V30, R30)
-    _add_scoring_cup("Target40", 40, 0.0, V40, R40)
-    _add_scoring_cup("Target50", 50, 0.0, V50, R50)
-    _add_scoring_cup("Target100L", 100, -HUNDO_X, V100, R100)
-    _add_scoring_cup("Target100R", 100, HUNDO_X, V100, R100)
+    _add_scoring_cup("Target30", 30, 0.0, T30_V, R30)
+    _add_scoring_cup("Target40", 40, 0.0, T40_V, R40)
+    _add_scoring_cup("Target50", 50, 0.0, T50_V, R50)
+    _add_scoring_cup("Target100L", 100, -T100_X, T100_V, R100)
+    _add_scoring_cup("Target100R", 100, T100_X, T100_V, R100)
 
-    # All seven values are real 4-inch backing holes. 10 and 20 are flush
-    # drains guided by the larger walls rather than fake scoring volumes.
     for target in _all_score_targets():
         var points := int(target["points"])
         var u := float(target["u"])
@@ -127,8 +160,14 @@ func _build_target_board() -> void:
         _add_drain_throat("Drain_%s" % target_id, u, v)
         _add_score_reset_point(points, u, v)
 
-func _add_scoring_cup(node_name: String, points: int, u: float, v: float, radius: float) -> void:
-    _add_clean_round_wall(
+func _add_scoring_cup(
+    node_name: String,
+    points: int,
+    u: float,
+    v: float,
+    radius: float
+) -> void:
+    _add_csg_ring(
         node_name,
         u,
         v,
@@ -201,8 +240,8 @@ func _build_perforated_target_board() -> void:
     for target in _all_score_targets():
         var cut := CSGCylinder3D.new()
         cut.name = "ScoreCut_%s" % String(target["id"])
-        cut.radius = TARGET_HOLE_RADIUS
-        cut.height = FACE_BOARD_THICKNESS * 3.0
+        cut.radius = PLAY_HOLE_RADIUS
+        cut.height = FACE_BOARD_THICKNESS * 3.2
         cut.sides = CIRCLE_SEGMENTS
         cut.smooth_faces = true
         cut.operation = CSGShape3D.OPERATION_SUBTRACTION
@@ -237,23 +276,22 @@ func _build_rear_drop_cavity() -> void:
         )
 
 func _add_drain_throat(node_name: String, u: float, v: float) -> void:
-    var wall_center_radius := TARGET_HOLE_RADIUS + THROAT_THICKNESS * 0.5
-    # End the throat slightly behind the visible face. This avoids a coplanar
-    # annular surface at the same depth as the target deck (z-fighting).
-    _add_clean_round_wall(
+    # The throat starts behind the visible face, so its front annulus can never
+    # z-fight with the target deck. Its inner diameter matches the playable cut.
+    _add_csg_ring(
         node_name,
         u,
         v,
-        wall_center_radius,
-        FACE_BOARD_THICKNESS - 0.002,
+        PLAY_HOLE_RADIUS + THROAT_THICKNESS * 0.5,
+        FACE_BOARD_THICKNESS - 0.035 * INCH,
         THROAT_THICKNESS,
-        -FACE_BOARD_THICKNESS + 0.001
+        -FACE_BOARD_THICKNESS + 0.020 * INCH
     )
 
 func _add_score_reset_point(points: int, u: float, v: float) -> void:
     var area := Area3D.new()
     area.name = "ScoreReset_%d" % points
-    area.position = _target_point(u, v, -0.006)
+    area.position = _target_point(u, v, -0.010)
     area.basis = Basis(FACE_RIGHT, FACE_N, FACE_V).orthonormalized()
     area.collision_layer = 0
     area.collision_mask = 1
@@ -262,88 +300,13 @@ func _add_score_reset_point(points: int, u: float, v: float) -> void:
 
     var collision := CollisionShape3D.new()
     var shape := CylinderShape3D.new()
-    shape.radius = TARGET_HOLE_RADIUS * 0.97
-    shape.height = 0.026
+    shape.radius = PLAY_HOLE_RADIUS * 0.96
+    shape.height = 0.030
     collision.shape = shape
     area.add_child(collision)
     area.body_entered.connect(_on_score_reset_entered.bind(points))
 
-func _add_10_u_wall() -> void:
-    var path: Array[Vector2] = []
-    path.append(Vector2(-U_RADIUS, U_LEG_TOP_V))
-    path.append(Vector2(-U_RADIUS, U_CENTER_V))
-
-    var arc_segments := 72
-    for index in range(arc_segments + 1):
-        var t := float(index) / float(arc_segments)
-        var angle := PI + PI * t
-        path.append(Vector2(
-            cos(angle) * U_RADIUS,
-            U_CENTER_V + sin(angle) * U_RADIUS
-        ))
-
-    path.append(Vector2(U_RADIUS, U_LEG_TOP_V))
-    _add_clean_path_wall("Target10U", path, GUIDE_HEIGHT, GUIDE_THICKNESS, RING_LIFT)
-
-func _add_clean_path_wall(
-    node_name: String,
-    path: Array[Vector2],
-    height: float,
-    thickness: float,
-    normal_start: float
-) -> void:
-    if path.size() < 2:
-        return
-
-    var left: Array[Vector2] = []
-    var right: Array[Vector2] = []
-    var half_thickness := thickness * 0.5
-
-    # Miter the path offsets using an averaged tangent at each point. This keeps
-    # the U continuous rather than leaving tiny per-segment cracks or overlaps.
-    for index in range(path.size()):
-        var tangent: Vector2
-        if index == 0:
-            tangent = path[1] - path[0]
-        elif index == path.size() - 1:
-            tangent = path[index] - path[index - 1]
-        else:
-            tangent = path[index + 1] - path[index - 1]
-        tangent = tangent.normalized()
-        var side := Vector2(-tangent.y, tangent.x) * half_thickness
-        left.append(path[index] + side)
-        right.append(path[index] - side)
-
-    var surface := SurfaceTool.new()
-    surface.begin(Mesh.PRIMITIVE_TRIANGLES)
-    surface.set_material(hole_material)
-
-    for index in range(path.size() - 1):
-        var l0 := _target_point(left[index].x, left[index].y, normal_start)
-        var l1 := _target_point(left[index + 1].x, left[index + 1].y, normal_start)
-        var r0 := _target_point(right[index].x, right[index].y, normal_start)
-        var r1 := _target_point(right[index + 1].x, right[index + 1].y, normal_start)
-        var l0t := l0 + FACE_N * height
-        var l1t := l1 + FACE_N * height
-        var r0t := r0 + FACE_N * height
-        var r1t := r1 + FACE_N * height
-
-        _add_quad(surface, l0, l1, l1t, l0t)
-        _add_quad(surface, r1, r0, r0t, r1t)
-        _add_quad(surface, l0t, l1t, r1t, r0t)
-
-    # Close only the two ends. The wall deliberately has no bottom face against
-    # the backing, eliminating the previous coplanar flashing artifacts.
-    var first_l := _target_point(left[0].x, left[0].y, normal_start)
-    var first_r := _target_point(right[0].x, right[0].y, normal_start)
-    var last_l := _target_point(left[-1].x, left[-1].y, normal_start)
-    var last_r := _target_point(right[-1].x, right[-1].y, normal_start)
-    _add_quad(surface, first_r, first_l, first_l + FACE_N * height, first_r + FACE_N * height)
-    _add_quad(surface, last_l, last_r, last_r + FACE_N * height, last_l + FACE_N * height)
-
-    _commit_wall_mesh(node_name, surface)
-
-func _add_clean_round_wall(
+func _add_csg_ring(
     node_name: String,
     u: float,
     v: float,
@@ -352,69 +315,128 @@ func _add_clean_round_wall(
     thickness: float,
     normal_start: float
 ) -> void:
-    var center := _target_point(u, v, normal_start)
-    var outer_radius := center_radius + thickness * 0.5
-    var inner_radius := maxf(0.001, center_radius - thickness * 0.5)
+    var frame := Node3D.new()
+    frame.name = "%sFrame" % node_name
+    frame.position = _target_point(u, v, normal_start)
+    frame.basis = Basis(FACE_RIGHT, FACE_N, FACE_V).orthonormalized()
+    add_child(frame)
 
-    var surface := SurfaceTool.new()
-    surface.begin(Mesh.PRIMITIVE_TRIANGLES)
-    surface.set_material(hole_material)
+    var ring := CSGCombiner3D.new()
+    ring.name = node_name
+    ring.use_collision = true
+    ring.collision_layer = 1
+    ring.collision_mask = 1
+    frame.add_child(ring)
 
-    for index in range(CIRCLE_SEGMENTS):
-        var a0 := TAU * float(index) / float(CIRCLE_SEGMENTS)
-        var a1 := TAU * float(index + 1) / float(CIRCLE_SEGMENTS)
-        var radial0 := FACE_RIGHT * cos(a0) + FACE_V * sin(a0)
-        var radial1 := FACE_RIGHT * cos(a1) + FACE_V * sin(a1)
+    var outer := CSGCylinder3D.new()
+    outer.name = "Outer"
+    outer.radius = center_radius + thickness * 0.5
+    outer.height = height
+    outer.sides = CIRCLE_SEGMENTS
+    outer.smooth_faces = true
+    outer.material = hole_material
+    outer.position.y = height * 0.5
+    ring.add_child(outer)
 
-        var o0 := center + radial0 * outer_radius
-        var o1 := center + radial1 * outer_radius
-        var i0 := center + radial0 * inner_radius
-        var i1 := center + radial1 * inner_radius
-        var o0t := o0 + FACE_N * height
-        var o1t := o1 + FACE_N * height
-        var i0t := i0 + FACE_N * height
-        var i1t := i1 + FACE_N * height
+    var inner := CSGCylinder3D.new()
+    inner.name = "InnerCut"
+    inner.radius = maxf(0.001, center_radius - thickness * 0.5)
+    inner.height = height + 0.010
+    inner.sides = CIRCLE_SEGMENTS
+    inner.smooth_faces = true
+    inner.operation = CSGShape3D.OPERATION_SUBTRACTION
+    inner.position.y = height * 0.5
+    ring.add_child(inner)
 
-        _add_quad(surface, o0, o1, o1t, o0t)
-        _add_quad(surface, i1, i0, i0t, i1t)
-        _add_quad(surface, o0t, o1t, i1t, i0t)
+func _add_csg_u_wall(
+    node_name: String,
+    center_v: float,
+    radius: float,
+    leg_top_v: float,
+    height: float,
+    thickness: float
+) -> void:
+    var frame := Node3D.new()
+    frame.name = "%sFrame" % node_name
+    frame.position = _target_point(0.0, center_v, RING_LIFT)
+    frame.basis = Basis(FACE_RIGHT, FACE_N, FACE_V).orthonormalized()
+    add_child(frame)
 
-    # No bottom annulus: it used to sit coplanar with the backing and caused
-    # angle-dependent shimmering/flashing.
-    _commit_wall_mesh(node_name, surface)
+    var shape := CSGCombiner3D.new()
+    shape.name = node_name
+    shape.use_collision = true
+    shape.collision_layer = 1
+    shape.collision_mask = 1
+    frame.add_child(shape)
 
-func _commit_wall_mesh(node_name: String, surface: SurfaceTool) -> void:
-    surface.generate_normals()
-    var mesh := surface.commit()
+    var outer := CSGCylinder3D.new()
+    outer.name = "LowerOuter"
+    outer.radius = radius + thickness * 0.5
+    outer.height = height
+    outer.sides = CIRCLE_SEGMENTS
+    outer.smooth_faces = true
+    outer.material = hole_material
+    outer.position.y = height * 0.5
+    shape.add_child(outer)
 
-    var body := StaticBody3D.new()
-    body.name = node_name
-    body.collision_layer = 1
-    body.collision_mask = 1
-    body.physics_material_override = target_physics_material
-    add_child(body)
+    var inner := CSGCylinder3D.new()
+    inner.name = "LowerInnerCut"
+    inner.radius = radius - thickness * 0.5
+    inner.height = height + 0.010
+    inner.sides = CIRCLE_SEGMENTS
+    inner.smooth_faces = true
+    inner.operation = CSGShape3D.OPERATION_SUBTRACTION
+    inner.position.y = height * 0.5
+    shape.add_child(inner)
 
-    var visual := MeshInstance3D.new()
-    visual.mesh = mesh
-    body.add_child(visual)
+    # Remove the entire upper half of the annulus. The two straight legs below
+    # are then unioned into the remaining lower semicircle.
+    var upper_cut := CSGBox3D.new()
+    upper_cut.name = "UpperHalfCut"
+    upper_cut.size = Vector3(
+        radius * 2.0 + thickness * 4.0,
+        height + 0.020,
+        radius * 2.0 + thickness * 4.0
+    )
+    upper_cut.position = Vector3(
+        0.0,
+        height * 0.5,
+        radius + thickness
+    )
+    upper_cut.operation = CSGShape3D.OPERATION_SUBTRACTION
+    shape.add_child(upper_cut)
 
-    var collision := CollisionShape3D.new()
-    collision.shape = mesh.create_trimesh_shape()
-    body.add_child(collision)
+    var leg_length := maxf(0.001, leg_top_v - center_v)
+    for side in [-1.0, 1.0]:
+        var leg := CSGBox3D.new()
+        leg.name = "Leg_%s" % ("L" if side < 0.0 else "R")
+        leg.size = Vector3(thickness, height, leg_length + thickness * 0.5)
+        leg.position = Vector3(
+            side * radius,
+            height * 0.5,
+            leg_length * 0.5
+        )
+        leg.material = hole_material
+        shape.add_child(leg)
 
-func _add_face_label(node_name: String, points: int, u: float, v: float, radius: float) -> void:
+func _add_face_label(
+    node_name: String,
+    points: int,
+    u: float,
+    v: float,
+    radius: float
+) -> void:
     var label := Label3D.new()
     label.name = node_name
     label.text = str(points)
-    label.font_size = 68 if points < 100 else 54
-    label.pixel_size = 0.00145
+    label.font_size = 58 if points < 100 else 48
+    label.pixel_size = 0.00135
     label.modulate = Color(0.08, 0.055, 0.040)
-    label.outline_size = 2
-    label.outline_modulate = Color(0.96, 0.95, 0.91)
+    label.outline_size = 0
     label.position = (
         _target_point(u, v)
-        - FACE_V * (radius + GUIDE_THICKNESS * 0.55)
-        + FACE_N * (GUIDE_HEIGHT * 0.56 + 0.002)
+        - FACE_V * (radius + GUIDE_THICKNESS * 0.5 + LABEL_FACE_OFFSET)
+        + FACE_N * (GUIDE_HEIGHT * 0.55)
     )
     label.basis = Basis(FACE_RIGHT, FACE_N, -FACE_V).orthonormalized()
     add_child(label)
