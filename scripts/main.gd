@@ -36,8 +36,8 @@ func _ready() -> void:
     debug_camera.name = "GameCamera"
     debug_camera.current = true
     add_child(debug_camera)
-    debug_camera.global_position = Vector3(0.0, 3.55, 8.65)
-    debug_camera.look_at(Vector3(0.0, 1.55, -1.65), Vector3.UP)
+    debug_camera.global_position = Vector3(0.0, 1.48, 3.55)
+    debug_camera.look_at(Vector3(0.0, 0.92, -0.34), Vector3.UP)
     debug_camera.locked_transform = debug_camera.global_transform
     debug_camera.yaw = debug_camera.rotation.y
     debug_camera.pitch = debug_camera.rotation.x
@@ -256,12 +256,7 @@ func _build_room() -> void:
     _add_room_box("BackWall", Vector3(12.0, 6.5, 0.28), Vector3(0.0, 3.05, -8.45), mahogany)
     _add_room_box("FrontWall", Vector3(12.0, 6.5, 0.28), Vector3(0.0, 3.05, 11.25), mahogany)
 
-func _add_room_box(
-    node_name: String,
-    size: Vector3,
-    position: Vector3,
-    material: Material
-) -> void:
+func _add_room_box(node_name: String, size: Vector3, position: Vector3, material: Material) -> void:
     var body := StaticBody3D.new()
     body.name = node_name
     body.position = position
