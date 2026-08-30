@@ -1,7 +1,9 @@
 class_name SkeeBallBall
 extends RigidBody3D
 
-const BASE_RADIUS := 1.625 * 0.0254
+# Commercial Classic service documentation lists 3-inch balls. With the
+# machine's 4-inch score holes this gives 0.5 inch of radial clearance.
+const BASE_RADIUS := 1.5 * 0.0254
 const GAME_SCALE := 4.0
 const RADIUS := BASE_RADIUS * GAME_SCALE
 const MASS_KG := 0.25
@@ -29,12 +31,12 @@ func _ready() -> void:
     var sphere := SphereMesh.new()
     sphere.radius = RADIUS
     sphere.height = RADIUS * 2.0
-    sphere.radial_segments = 24
-    sphere.rings = 14
+    sphere.radial_segments = 32
+    sphere.rings = 18
 
     var material := StandardMaterial3D.new()
-    material.albedo_color = Color(0.86, 0.19, 0.13)
-    material.roughness = 0.42
+    material.albedo_color = Color(0.63, 0.19, 0.12)
+    material.roughness = 0.50
     sphere.material = material
     mesh_instance.mesh = sphere
     add_child(mesh_instance)
@@ -46,8 +48,8 @@ func _ready() -> void:
     add_child(collision)
 
     var physics_material := PhysicsMaterial.new()
-    physics_material.friction = 0.72
-    physics_material.bounce = 0.04
+    physics_material.friction = 0.74
+    physics_material.bounce = 0.035
     physics_material_override = physics_material
     freeze = true
 
