@@ -36,8 +36,8 @@ func _ready() -> void:
     debug_camera.name = "GameCamera"
     debug_camera.current = true
     add_child(debug_camera)
-    debug_camera.global_position = Vector3(0.0, 1.48, 3.55)
-    debug_camera.look_at(Vector3(0.0, 0.92, -0.34), Vector3.UP)
+    debug_camera.global_position = Vector3(0.0, 4.20, 10.40)
+    debug_camera.look_at(Vector3(0.0, 2.70, -1.00), Vector3.UP)
     debug_camera.locked_transform = debug_camera.global_transform
     debug_camera.yaw = debug_camera.rotation.y
     debug_camera.pitch = debug_camera.rotation.x
@@ -166,7 +166,9 @@ func _on_machine_scored(points: int, scored_ball: SkeeBallBall) -> void:
     score += points
     _refresh_score("+%d" % points)
 
-    await get_tree().create_timer(0.85).timeout
+    # The score trigger now sits directly at the mouth of each through-hole.
+    # Hold only briefly so the scored opening is perceptible, then reset.
+    await get_tree().create_timer(0.18).timeout
     if is_instance_valid(scored_ball) and scored_ball.scored:
         scored_ball.reset_to_start()
         _refresh_score()
@@ -227,9 +229,9 @@ func _build_lighting() -> void:
     world_environment.environment = environment
     add_child(world_environment)
 
-    _add_room_light(Vector3(0.0, 5.25, 6.0), 3.4, 11.0, true)
-    _add_room_light(Vector3(0.0, 5.10, 0.4), 3.0, 10.0, false)
-    _add_room_light(Vector3(0.0, 4.65, -4.7), 3.4, 8.0, false)
+    _add_room_light(Vector3(0.0, 9.7, 8.0), 5.0, 20.0, true)
+    _add_room_light(Vector3(0.0, 9.2, 0.0), 4.5, 18.0, false)
+    _add_room_light(Vector3(0.0, 8.6, -7.0), 5.0, 17.0, false)
 
 func _add_room_light(position: Vector3, energy: float, range: float, shadows: bool) -> void:
     var light := OmniLight3D.new()
@@ -249,14 +251,19 @@ func _build_room() -> void:
     mahogany_floor.albedo_color = Color(0.20, 0.040, 0.026)
     mahogany_floor.roughness = 0.86
 
-    _add_room_box("Floor", Vector3(12.0, 0.30, 20.0), Vector3(0.0, -0.15, 1.4), mahogany_floor)
-    _add_room_box("Ceiling", Vector3(12.0, 0.25, 20.0), Vector3(0.0, 6.25, 1.4), mahogany)
-    _add_room_box("LeftWall", Vector3(0.28, 6.5, 20.0), Vector3(-6.0, 3.05, 1.4), mahogany)
-    _add_room_box("RightWall", Vector3(0.28, 6.5, 20.0), Vector3(6.0, 3.05, 1.4), mahogany)
-    _add_room_box("BackWall", Vector3(12.0, 6.5, 0.28), Vector3(0.0, 3.05, -8.45), mahogany)
-    _add_room_box("FrontWall", Vector3(12.0, 6.5, 0.28), Vector3(0.0, 3.05, 11.25), mahogany)
+    _add_room_box("Floor", Vector3(18.0, 0.30, 32.0), Vector3(0.0, -0.15, 1.0), mahogany_floor)
+    _add_room_box("Ceiling", Vector3(18.0, 0.25, 32.0), Vector3(0.0, 11.75, 1.0), mahogany)
+    _add_room_box("LeftWall", Vector3(0.28, 12.0, 32.0), Vector3(-9.0, 5.85, 1.0), mahogany)
+    _add_room_box("RightWall", Vector3(0.28, 12.0, 32.0), Vector3(9.0, 5.85, 1.0), mahogany)
+    _add_room_box("BackWall", Vector3(18.0, 12.0, 0.28), Vector3(0.0, 5.85, -15.0), mahogany)
+    _add_room_box("FrontWall", Vector3(18.0, 12.0, 0.28), Vector3(0.0, 5.85, 17.0), mahogany)
 
-func _add_room_box(node_name: String, size: Vector3, position: Vector3, material: Material) -> void:
+func _add_room_box(
+    node_name: String,
+    size: Vector3,
+    position: Vector3,
+    material: Material
+) -> void:
     var body := StaticBody3D.new()
     body.name = node_name
     body.position = position

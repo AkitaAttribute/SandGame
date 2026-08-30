@@ -2,7 +2,7 @@ class_name SkeeBallBall
 extends RigidBody3D
 
 const BASE_RADIUS := 1.625 * 0.0254
-const GAME_SCALE := 1.5
+const GAME_SCALE := 4.0
 const RADIUS := BASE_RADIUS * GAME_SCALE
 const MASS_KG := 0.25
 const OUT_OF_BOUNDS_Y := -1.0
@@ -24,23 +24,27 @@ func _ready() -> void:
     continuous_cd = true
     contact_monitor = true
     max_contacts_reported = 8
+
     var mesh_instance := MeshInstance3D.new()
     var sphere := SphereMesh.new()
     sphere.radius = RADIUS
     sphere.height = RADIUS * 2.0
-    sphere.radial_segments = 20
-    sphere.rings = 12
+    sphere.radial_segments = 24
+    sphere.rings = 14
+
     var material := StandardMaterial3D.new()
     material.albedo_color = Color(0.86, 0.19, 0.13)
     material.roughness = 0.42
     sphere.material = material
     mesh_instance.mesh = sphere
     add_child(mesh_instance)
+
     var collision := CollisionShape3D.new()
     var shape := SphereShape3D.new()
     shape.radius = RADIUS
     collision.shape = shape
     add_child(collision)
+
     var physics_material := PhysicsMaterial.new()
     physics_material.friction = 0.72
     physics_material.bounce = 0.04
@@ -67,11 +71,13 @@ func is_waiting() -> bool:
 func launch(direction: Vector3, speed: float) -> void:
     if not is_waiting():
         return
+
     var launch_direction := direction
     launch_direction.y = 0.0
     if launch_direction.length_squared() < 0.0001:
         launch_direction = Vector3.FORWARD
     launch_direction = launch_direction.normalized()
+
     freeze = false
     sleeping = false
     launched = true
@@ -92,6 +98,7 @@ func mark_scored() -> void:
 func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
     if freeze:
         return
+
     var body_velocity := state.linear_velocity
     body_velocity.y -= maxf(0.0, SkeeBallSettings.gravity) * state.step
     state.linear_velocity = body_velocity
@@ -99,12 +106,20 @@ func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
 func _physics_process(delta: float) -> void:
     if not launched:
         return
-    if global_position.y < OUT_OF_BOUNDS_Y or absf(global_position.x) > 6.0 or global_position.z < -8.0 or global_position.z > 11.0:
+
+    if (
+        global_position.y < OUT_OF_BOUNDS_Y
+        or absf(global_position.x) > 10.0
+        or global_position.z < -14.0
+        or global_position.z > 16.0
+    ):
         reset_to_start()
         return
+
     if linear_velocity.length() <= QUIET_SPEED and angular_velocity.length() <= 0.8:
         quiet_time += delta
     else:
         quiet_time = 0.0
+
     if quiet_time >= QUIET_TIME_TO_RESET:
         reset_to_start()
